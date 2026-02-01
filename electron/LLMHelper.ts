@@ -50,7 +50,7 @@ export class LLMHelper {
     return text;
   }
 
-  private async callOllama(prompt: string): Promise<string> {
+  private async callOllama(prompt: string, images?: string[]): Promise<string> {
     try {
       const response = await fetch(`${this.ollamaUrl}/api/generate`, {
         method: 'POST',
@@ -60,6 +60,7 @@ export class LLMHelper {
         body: JSON.stringify({
           model: this.ollamaModel,
           prompt: prompt,
+          images: images,
           stream: false,
           options: {
             temperature: 0.7,
@@ -132,6 +133,20 @@ export class LLMHelper {
   "reasoning": "Explanation of why these suggestions are appropriate."
 }\nImportant: Return ONLY the JSON object, without any markdown formatting or code blocks.`
 
+      if (!this.useOllama && !this.model) {
+        throw new Error("LLM not configured: Neither Ollama nor Gemini is active");
+      }
+
+      if (this.useOllama) {
+        const images = await Promise.all(imagePaths.map(async (path) => {
+          const data = await fs.promises.readFile(path);
+          return data.toString('base64');
+        }));
+        const responseText = await this.callOllama(prompt, images);
+        const text = this.cleanJsonResponse(responseText);
+        return JSON.parse(text);
+      }
+
       const result = await this.model.generateContent([prompt, ...imageParts])
       const response = await result.response
       const text = this.cleanJsonResponse(response.text())
@@ -153,8 +168,23 @@ export class LLMHelper {
   }
 }\nImportant: Return ONLY the JSON object, without any markdown formatting or code blocks.`
 
-    console.log("[LLMHelper] Calling Gemini LLM for solution...");
+    console.log("[LLMHelper] Calling LLM for solution...");
+
+    if (!this.useOllama && !this.model) {
+      throw new Error("LLM not configured: Neither Ollama nor Gemini is active");
+    }
+
     try {
+      if (this.useOllama) {
+        console.log("[LLMHelper] Calling Ollama for solution...");
+        const responseText = await this.callOllama(prompt);
+        console.log("[LLMHelper] Ollama returned result.");
+        const text = this.cleanJsonResponse(responseText);
+        const parsed = JSON.parse(text);
+        console.log("[LLMHelper] Parsed LLM response:", parsed);
+        return parsed;
+      }
+
       const result = await this.model.generateContent(prompt)
       console.log("[LLMHelper] Gemini LLM returned result.");
       const response = await result.response
@@ -182,6 +212,22 @@ export class LLMHelper {
   }
 }\nImportant: Return ONLY the JSON object, without any markdown formatting or code blocks.`
 
+      if (!this.useOllama && !this.model) {
+        throw new Error("LLM not configured: Neither Ollama nor Gemini is active");
+      }
+
+      if (this.useOllama) {
+        const images = await Promise.all(debugImagePaths.map(async (path) => {
+          const data = await fs.promises.readFile(path);
+          return data.toString('base64');
+        }));
+        const responseText = await this.callOllama(prompt, images);
+        const text = this.cleanJsonResponse(responseText);
+        const parsed = JSON.parse(text);
+        console.log("[LLMHelper] Parsed debug LLM response:", parsed);
+        return parsed;
+      }
+
       const result = await this.model.generateContent([prompt, ...imageParts])
       const response = await result.response
       const text = this.cleanJsonResponse(response.text())
@@ -204,6 +250,17 @@ export class LLMHelper {
         }
       };
       const prompt = `${this.systemPrompt}\n\nDescribe this audio clip in a short, concise answer. In addition to your main answer, suggest several possible actions or responses the user could take next based on the audio. Do not return a structured JSON object, just answer naturally as you would to a user.`;
+      
+      if (!this.useOllama && !this.model) {
+        throw new Error("LLM not configured: Neither Ollama nor Gemini is active");
+      }
+
+      if (this.useOllama) {
+        console.warn("[LLMHelper] Ollama audio analysis not fully supported. Sending text prompt only.");
+        const responseText = await this.callOllama(prompt);
+        return { text: responseText, timestamp: Date.now() };
+      }
+
       const result = await this.model.generateContent([prompt, audioPart]);
       const response = await result.response;
       const text = response.text();
@@ -223,6 +280,17 @@ export class LLMHelper {
         }
       };
       const prompt = `${this.systemPrompt}\n\nDescribe this audio clip in a short, concise answer. In addition to your main answer, suggest several possible actions or responses the user could take next based on the audio. Do not return a structured JSON object, just answer naturally as you would to a user and be concise.`;
+      
+      if (!this.useOllama && !this.model) {
+        throw new Error("LLM not configured: Neither Ollama nor Gemini is active");
+      }
+
+      if (this.useOllama) {
+        console.warn("[LLMHelper] Ollama audio analysis not fully supported. Sending text prompt only.");
+        const responseText = await this.callOllama(prompt);
+        return { text: responseText, timestamp: Date.now() };
+      }
+
       const result = await this.model.generateContent([prompt, audioPart]);
       const response = await result.response;
       const text = response.text();
@@ -243,12 +311,206 @@ export class LLMHelper {
         }
       };
       const prompt = `${this.systemPrompt}\n\nDescribe the content of this image in a short, concise answer. In addition to your main answer, suggest several possible actions or responses the user could take next based on the image. Do not return a structured JSON object, just answer naturally as you would to a user. Be concise and brief.`;
+      
+      if (!this.useOllama && !this.model) {
+        throw new Error("LLM not configured: Neither Ollama nor Gemini is active");
+      }
+
+      if (this.useOllama) {
+        const base64Image = imageData.toString("base64");
+        const responseText = await this.callOllama(prompt, [base64Image]);
+        return { text: responseText, timestamp: Date.now() };
+      }
+
       const result = await this.model.generateContent([prompt, imagePart]);
       const response = await result.response;
       const text = response.text();
       return { text, timestamp: Date.now() };
     } catch (error) {
       console.error("Error analyzing image file:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * Solves problems from images - extracts, classifies, and generates complete solutions.
+   * Handles both coding challenges and multiple-choice questions.
+   */
+  public async solveImageProblem(imagePath: string) {
+    try {
+      const imageData = await fs.promises.readFile(imagePath);
+      const imagePart = {
+        inlineData: {
+          data: imageData.toString("base64"),
+          mimeType: "image/png"
+        }
+      };
+
+      // Step 1: Extract and classify the problem from the image
+      const classificationPrompt = `Analyze this image carefully and extract the problem content.
+
+Determine the problem type:
+1. "coding" - If it's a programming/coding challenge, algorithm problem, or asks for code implementation
+2. "mcq" - If it's a multiple-choice question with options (A, B, C, D or similar)
+3. "general" - If it's any other type of question or problem
+
+Extract ALL text, code snippets, and problem details visible in the image.
+
+Return ONLY a JSON object in this exact format:
+{
+  "problem_type": "coding" | "mcq" | "general",
+  "problem_statement": "The complete problem statement extracted from the image",
+  "code_snippet": "Any existing code shown in the image, or null if none",
+  "options": ["Option A text", "Option B text", ...] or null if not MCQ,
+  "constraints": ["Any constraints mentioned"],
+  "examples": ["Any examples shown"]
+}
+
+Important: Return ONLY the JSON object, no markdown formatting or code blocks.`;
+
+      console.log("[LLMHelper] Extracting and classifying problem from image...");
+      
+      // Use Gemini for vision (Ollama text models can't process images)
+      if (!this.model) {
+        throw new Error("Vision model (Gemini) required for image problem solving. Please configure GEMINI_API_KEY.");
+      }
+
+      const classificationResult = await this.model.generateContent([classificationPrompt, imagePart]);
+      const classificationResponse = await classificationResult.response;
+      const classificationText = this.cleanJsonResponse(classificationResponse.text());
+      
+      let problemData;
+      try {
+        problemData = JSON.parse(classificationText);
+      } catch (parseError) {
+        console.error("[LLMHelper] Failed to parse classification response:", classificationText);
+        throw new Error("Failed to parse problem from image");
+      }
+
+      console.log("[LLMHelper] Problem classified as:", problemData.problem_type);
+
+      // Step 2: Generate solution based on problem type
+      let solutionPrompt: string;
+      
+      if (problemData.problem_type === "coding") {
+        solutionPrompt = `You are an expert programmer. Solve this coding problem completely.
+
+Problem Statement:
+${problemData.problem_statement}
+
+${problemData.code_snippet ? `Existing Code:\n${problemData.code_snippet}\n` : ""}
+${problemData.constraints?.length ? `Constraints:\n${problemData.constraints.join("\n")}\n` : ""}
+${problemData.examples?.length ? `Examples:\n${problemData.examples.join("\n")}\n` : ""}
+
+Provide a complete, working solution. Return ONLY a JSON object:
+{
+  "solution": {
+    "code": "Complete working code solution here",
+    "language": "python",
+    "problem_statement": "Restated problem",
+    "explanation": "Step-by-step explanation of the approach",
+    "time_complexity": "O(n) or similar",
+    "space_complexity": "O(1) or similar",
+    "thoughts": ["Key insight 1", "Key insight 2", "..."]
+  }
+}
+
+Important: The code must be complete, correct, and executable. Return ONLY the JSON object.`;
+
+      } else if (problemData.problem_type === "mcq") {
+        solutionPrompt = `You are an expert at solving multiple-choice questions. Analyze this question carefully.
+
+Question:
+${problemData.problem_statement}
+
+Options:
+${problemData.options?.map((opt: string, i: number) => `${String.fromCharCode(65 + i)}. ${opt}`).join("\n") || "Options not clearly visible"}
+
+Determine the correct answer with detailed reasoning. Return ONLY a JSON object:
+{
+  "solution": {
+    "code": "The correct answer is: [LETTER]. [Full option text]",
+    "problem_statement": "The question being asked",
+    "correct_answer": "A, B, C, or D",
+    "explanation": "Detailed reasoning for why this answer is correct",
+    "why_others_wrong": "Brief explanation of why other options are incorrect",
+    "thoughts": ["Key reasoning step 1", "Key reasoning step 2", "..."]
+  }
+}
+
+Important: Return ONLY the JSON object.`;
+
+      } else {
+        // General problem type
+        solutionPrompt = `Solve this problem completely.
+
+Problem:
+${problemData.problem_statement}
+
+${problemData.code_snippet ? `Context:\n${problemData.code_snippet}\n` : ""}
+
+Provide a clear, complete solution. Return ONLY a JSON object:
+{
+  "solution": {
+    "code": "Complete answer or solution here",
+    "problem_statement": "Restated problem",
+    "explanation": "Detailed explanation",
+    "thoughts": ["Key point 1", "Key point 2", "..."]
+  }
+}
+
+Important: Return ONLY the JSON object.`;
+      }
+
+      console.log("[LLMHelper] Generating solution...");
+      const solutionResult = await this.model.generateContent(solutionPrompt);
+      const solutionResponse = await solutionResult.response;
+      const solutionText = this.cleanJsonResponse(solutionResponse.text());
+      
+      let solutionData;
+      try {
+        solutionData = JSON.parse(solutionText);
+      } catch (parseError) {
+        console.error("[LLMHelper] Failed to parse solution response:", solutionText);
+        // Return a fallback structure with the raw text
+        solutionData = {
+          solution: {
+            code: solutionText,
+            problem_statement: problemData.problem_statement,
+            thoughts: ["Solution generated but could not be parsed as JSON"],
+            time_complexity: "N/A",
+            space_complexity: "N/A"
+          }
+        };
+      }
+
+      console.log("[LLMHelper] Solution generated successfully");
+      
+      // Return combined result with problem info and solution
+      return {
+        problemInfo: {
+          problem_statement: problemData.problem_statement,
+          problem_type: problemData.problem_type,
+          code_snippet: problemData.code_snippet,
+          options: problemData.options,
+          constraints: problemData.constraints,
+          examples: problemData.examples,
+          input_format: { description: "Extracted from image", parameters: [] as Array<{name: string, type: string}> },
+          output_format: { description: "Generated solution", type: "string", subtype: "code" },
+          complexity: {
+            time: solutionData.solution?.time_complexity || "N/A",
+            space: solutionData.solution?.space_complexity || "N/A"
+          },
+          test_cases: [] as Array<{input: string, output: string}>,
+          validation_type: "auto",
+          difficulty: "extracted"
+        },
+        solution: solutionData.solution,
+        timestamp: Date.now()
+      };
+      
+    } catch (error) {
+      console.error("[LLMHelper] Error solving image problem:", error);
       throw error;
     }
   }

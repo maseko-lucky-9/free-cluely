@@ -11,7 +11,7 @@ Roy built Cluely using Electron, a desktop app framework based on Chromium and N
 - **Transparent Window (**`transparent: true`**)** – This Electron BrowserWindow property ensures the background is fully transparent, showing only explicitly rendered content.
 - **Always On Top (**`alwaysOnTop: true`**)** – Electron's flag forces the overlay window to persistently float above all other applications, making it consistently accessible without being covered.
 
-Here's an example code snippet: 
+Here's an example code snippet:
 
 ```
 const { BrowserWindow } = require('electron');
@@ -35,7 +35,7 @@ win.loadURL('file://' + __dirname + '/index.html');
 
 ### Backend Communication
 
-The overlay captures clipboard data, screenshots, or selected text and sends this information to an AI backend (e.g., OpenAI) via WebSockets or HTTP requests. This backend quickly processes and returns useful suggestions or solutions.
+The overlay captures clipboard data, screenshots, or selected text and sends this information to an AI backend. This project uses **Google Gemini (`gemini-2.0-flash`)** for its fast multimodal capabilities (text + vision), with optional Ollama support for local/offline usage. The backend quickly processes and returns useful suggestions or solutions.
 
 ### Screen Capture and OCR
 

@@ -68,25 +68,47 @@ export class ProcessingHelper {
         }
       }
 
-      // NEW: Handle screenshot as plain text (like audio)
+      // NEW: Use problem-solving flow instead of just describing the image
       mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.INITIAL_START)
       this.appState.setView("solutions")
       this.currentProcessingAbortController = new AbortController()
       try {
-        const imageResult = await this.llmHelper.analyzeImageFile(lastPath);
+        // Use the new solveImageProblem method that extracts, classifies, and solves
+        console.log("[ProcessingHelper] Solving problem from image:", lastPath);
+        const result = await this.llmHelper.solveImageProblem(lastPath);
+        
+        // Set problem info for the state
         const problemInfo = {
-          problem_statement: imageResult.text,
-          input_format: { description: "Generated from screenshot", parameters: [] as any[] },
-          output_format: { description: "Generated from screenshot", type: "string", subtype: "text" },
-          complexity: { time: "N/A", space: "N/A" },
-          test_cases: [] as any[],
-          validation_type: "manual",
-          difficulty: "custom"
+          problem_statement: result.problemInfo.problem_statement,
+          problem_type: result.problemInfo.problem_type,
+          input_format: result.problemInfo.input_format,
+          output_format: result.problemInfo.output_format,
+          complexity: result.problemInfo.complexity,
+          test_cases: result.problemInfo.test_cases || [] as any[],
+          validation_type: result.problemInfo.validation_type,
+          difficulty: result.problemInfo.difficulty
         };
+        
+        // Send problem extracted event first
         mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.PROBLEM_EXTRACTED, problemInfo);
         this.appState.setProblemInfo(problemInfo);
+        
+        // Then send the solution
+        if (result.solution) {
+          const solutionPayload = {
+            solution: {
+              code: result.solution.code || "",
+              thoughts: result.solution.thoughts || [],
+              time_complexity: result.solution.time_complexity || result.problemInfo.complexity?.time || "N/A",
+              space_complexity: result.solution.space_complexity || result.problemInfo.complexity?.space || "N/A",
+              explanation: result.solution.explanation || ""
+            }
+          };
+          console.log("[ProcessingHelper] Sending solution:", solutionPayload);
+          mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.SOLUTION_SUCCESS, solutionPayload);
+        }
       } catch (error: any) {
-        console.error("Image processing error:", error)
+        console.error("Image problem-solving error:", error)
         mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.INITIAL_SOLUTION_ERROR, error.message)
       } finally {
         this.currentProcessingAbortController = null
