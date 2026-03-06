@@ -129,8 +129,32 @@ export class ProcessingHelper {
       try {
         // Get problem info and current solution
         const problemInfo = this.appState.getProblemInfo()
+        
+        // FIX: If no problem info exists, treat the extra screenshot as a new problem
         if (!problemInfo) {
-          throw new Error("No problem info available")
+          console.log("[ProcessingHelper] No problem info available, processing extra screenshot as new problem")
+          const lastExtraPath = extraScreenshotQueue[extraScreenshotQueue.length - 1]
+          const result = await this.llmHelper.solveImageProblem(lastExtraPath)
+          
+          // Store the new problem info
+          const newProblemInfo = {
+            problem_statement: result.problemInfo.problem_statement,
+            problem_type: result.problemInfo.problem_type,
+            input_format: result.problemInfo.input_format,
+            output_format: result.problemInfo.output_format,
+            complexity: result.problemInfo.complexity,
+            test_cases: result.problemInfo.test_cases || [] as any[],
+            validation_type: result.problemInfo.validation_type,
+            difficulty: result.problemInfo.difficulty
+          }
+          this.appState.setProblemInfo(newProblemInfo)
+          
+          // Send the solution as debug result
+          mainWindow.webContents.send(
+            this.appState.PROCESSING_EVENTS.DEBUG_SUCCESS,
+            { solution: result.solution }
+          )
+          return
         }
 
         // Get current solution from state

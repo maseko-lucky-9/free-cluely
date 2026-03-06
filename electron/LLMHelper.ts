@@ -43,8 +43,15 @@ export class LLMHelper {
   }
 
   private cleanJsonResponse(text: string): string {
-    // Remove markdown code block syntax if present
-    text = text.replace(/^```(?:json)?\n/, '').replace(/\n```$/, '');
+    // Remove markdown code block syntax if present (handles ```json, ``` and variations)
+    text = text.replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?```\s*$/i, '');
+    
+    // Try to extract JSON object from the text (Ollama may include extra explanation text)
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      text = jsonMatch[0];
+    }
+    
     // Remove any leading/trailing whitespace
     text = text.trim();
     return text;
@@ -370,21 +377,37 @@ Important: Return ONLY the JSON object, no markdown formatting or code blocks.`;
 
       console.log("[LLMHelper] Extracting and classifying problem from image...");
       
-      // Use Gemini for vision (Ollama text models can't process images)
-      if (!this.model) {
-        throw new Error("Vision model (Gemini) required for image problem solving. Please configure GEMINI_API_KEY.");
+      let classificationText: string;
+      
+      if (this.useOllama) {
+        // Use Ollama with vision model (llava, bakllava, etc.)
+        const imageBase64 = imageData.toString("base64");
+        const ollamaResponse = await this.callOllama(classificationPrompt, [imageBase64]);
+        classificationText = this.cleanJsonResponse(ollamaResponse);
+      } else {
+        // Use Gemini for vision
+        if (!this.model) {
+          throw new Error("Vision model (Gemini) required for image problem solving. Please configure GEMINI_API_KEY.");
+        }
+        const classificationResult = await this.model.generateContent([classificationPrompt, imagePart]);
+        const classificationResponse = await classificationResult.response;
+        classificationText = this.cleanJsonResponse(classificationResponse.text());
       }
-
-      const classificationResult = await this.model.generateContent([classificationPrompt, imagePart]);
-      const classificationResponse = await classificationResult.response;
-      const classificationText = this.cleanJsonResponse(classificationResponse.text());
       
       let problemData;
       try {
         problemData = JSON.parse(classificationText);
       } catch (parseError) {
-        console.error("[LLMHelper] Failed to parse classification response:", classificationText);
-        throw new Error("Failed to parse problem from image");
+        console.warn("[LLMHelper] Failed to parse classification response as JSON, using fallback:", classificationText);
+        // Fallback: treat as general problem using the raw text
+        problemData = {
+          problem_type: "general",
+          problem_statement: classificationText.substring(0, 2000), // Limit length
+          code_snippet: null,
+          options: null,
+          constraints: [],
+          examples: []
+        };
       }
 
       console.log("[LLMHelper] Problem classified as:", problemData.problem_type);
@@ -406,7 +429,7 @@ Provide a complete, working solution. Return ONLY a JSON object:
 {
   "solution": {
     "code": "Complete working code solution here",
-    "language": "python",
+    "language": "C#",
     "problem_statement": "Restated problem",
     "explanation": "Step-by-step explanation of the approach",
     "time_complexity": "O(n) or similar",
@@ -415,7 +438,7 @@ Provide a complete, working solution. Return ONLY a JSON object:
   }
 }
 
-Important: The code must be complete, correct, and executable. Return ONLY the JSON object.`;
+Important: The code must be complete, correct, and executable C# code. Return ONLY the JSON object.`;
 
       } else if (problemData.problem_type === "mcq") {
         solutionPrompt = `You are an expert at solving multiple-choice questions. Analyze this question carefully.
@@ -462,10 +485,21 @@ Provide a clear, complete solution. Return ONLY a JSON object:
 Important: Return ONLY the JSON object.`;
       }
 
-      console.log("[LLMHelper] Generating solution...");
-      const solutionResult = await this.model.generateContent(solutionPrompt);
-      const solutionResponse = await solutionResult.response;
-      const solutionText = this.cleanJsonResponse(solutionResponse.text());
+      console.log("[LLMHelper] Generating solution with image context...");
+      
+      let solutionText: string;
+      
+      if (this.useOllama) {
+        // Use Ollama with vision model for solution generation
+        const imageBase64 = imageData.toString("base64");
+        const ollamaResponse = await this.callOllama(solutionPrompt, [imageBase64]);
+        solutionText = this.cleanJsonResponse(ollamaResponse);
+      } else {
+        // CRITICAL FIX: Pass the imagePart again so the solver sees the indentation/diagrams/context
+        const solutionResult = await this.model!.generateContent([solutionPrompt, imagePart]);
+        const solutionResponse = await solutionResult.response;
+        solutionText = this.cleanJsonResponse(solutionResponse.text());
+      }
       
       let solutionData;
       try {

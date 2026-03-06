@@ -19,9 +19,10 @@ export class WindowHelper {
   // Initialize with explicit number type and 0 value
   private screenWidth: number = 0
   private screenHeight: number = 0
-  private step: number = 0
+  private step: number = 50  // FIX: Was 0, now 50 pixels per arrow key press
   private currentX: number = 0
   private currentY: number = 0
+  private isDragging: boolean = false  // FIX: Track drag state to prevent setBounds during drag
 
   constructor(appState: AppState) {
     this.appState = appState
@@ -30,9 +31,9 @@ export class WindowHelper {
   public setWindowDimensions(width: number, height: number): void {
     if (!this.mainWindow || this.mainWindow.isDestroyed()) return
 
-    // Get current window position
-    const [currentX, currentY] = this.mainWindow.getPosition()
-
+    // Get current window bounds
+    const bounds = this.mainWindow.getBounds()
+    
     // Get screen dimensions
     const primaryDisplay = screen.getPrimaryDisplay()
     const workArea = primaryDisplay.workAreaSize
@@ -42,18 +43,40 @@ export class WindowHelper {
       workArea.width * (this.appState.getHasDebugged() ? 0.75 : 0.5)
     )
 
-    // Ensure width doesn't exceed max allowed width and height is reasonable
+    // Ensure width doesn't exceed max allowed width
     const newWidth = Math.min(width + 32, maxAllowedWidth)
-    const newHeight = Math.ceil(height)
+    
+    // FIX: Constrain height to fit screen - use full work area height
+    const maxAllowedHeight = workArea.height - 20  // Leave 20px margin
+    const newHeight = Math.min(Math.ceil(height), maxAllowedHeight)
+
+    // FIX: Check if dimensions have actually changed OR if we're dragging.
+    // Calling setBounds/setSize during a native window drag (via -webkit-app-region: drag)
+    // conflicts with the OS window manager's move loop, causing the window to freeze.
+    if (this.isDragging) {
+      return  // Skip all dimension updates during drag
+    }
+    
+    if (bounds.width === newWidth && bounds.height === newHeight) {
+      return  // Skip if dimensions unchanged
+    }
+
+    // Capture current position for calculations
+    const currentX = bounds.x
+    const currentY = bounds.y
 
     // Center the window horizontally if it would go off screen
     const maxX = workArea.width - newWidth
     const newX = Math.min(Math.max(currentX, 0), maxX)
+    
+    // Ensure window doesn't go below screen bottom
+    const maxY = workArea.height - newHeight
+    const newY = Math.min(Math.max(currentY, 0), maxY)
 
     // Update window bounds
     this.mainWindow.setBounds({
       x: newX,
-      y: currentY,
+      y: newY,
       width: newWidth,
       height: newHeight
     })
@@ -148,6 +171,11 @@ export class WindowHelper {
   private setupWindowListeners(): void {
     if (!this.mainWindow) return
 
+    // Track drag state to prevent setBounds interference
+    this.mainWindow.on("will-move", () => {
+      this.isDragging = true
+    })
+
     this.mainWindow.on("move", () => {
       if (this.mainWindow) {
         const bounds = this.mainWindow.getBounds()
@@ -155,6 +183,10 @@ export class WindowHelper {
         this.currentX = bounds.x
         this.currentY = bounds.y
       }
+    })
+
+    this.mainWindow.on("moved", () => {
+      this.isDragging = false
     })
 
     this.mainWindow.on("resize", () => {
