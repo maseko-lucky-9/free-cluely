@@ -8,6 +8,7 @@ import screenshot from "screenshot-desktop"
 import {
   describeScreenshotFailure,
   describeScreenCapturePermission,
+  isLaunchedFromShell,
   MediaAccessStatus
 } from "./screenshotErrors"
 
@@ -132,7 +133,8 @@ export class ScreenshotHelper {
         describeScreenshotFailure(raw, {
           appName: app.getName(),
           exePath: app.getPath("exe"),
-          isPackaged: app.isPackaged
+          isPackaged: app.isPackaged,
+          launchedFromShell: this.launchedFromShell()
         })
       )
     } finally {
@@ -151,27 +153,63 @@ export class ScreenshotHelper {
    * Spawning the screencapture CLI does not reliably do so, which is why no
    * entry appears in the settings pane for an unpackaged build.
    */
+  /**
+   * Finder/Dock/`open` launches are reparented to launchd, so ppid === 1 means
+   * this app is responsible for itself. Anything else was started by a shell,
+   * and macOS attributes screen capture to the app owning that shell instead.
+   */
+  private launchedFromShell(): boolean {
+    return isLaunchedFromShell(process.ppid)
+  }
+
+  /**
+   * Finder-launched runs have no visible stdout, which is why a correctly
+   * attributed failure was previously impossible to diagnose. Append to a file
+   * inside userData instead.
+   */
+  private logPermission(line: string): void {
+    try {
+      const logPath = path.join(app.getPath("userData"), "permission.log")
+      fs.appendFileSync(logPath, `${new Date().toISOString()}  ${line}\n`)
+    } catch {
+      // Diagnostics must never break capture.
+    }
+  }
+
   private async ensureScreenCapturePermission(): Promise<void> {
     if (process.platform !== "darwin") return
 
+    const fromShell = this.launchedFromShell()
     const context = {
       appName: app.getName(),
       exePath: app.getPath("exe"),
-      isPackaged: app.isPackaged
+      isPackaged: app.isPackaged,
+      launchedFromShell: fromShell
     }
 
     let status = systemPreferences.getMediaAccessStatus("screen") as MediaAccessStatus
+    this.logPermission(
+      `preflight status=${status} packaged=${app.isPackaged} ppid=${process.ppid} fromShell=${fromShell}`
+    )
 
-    if (status === "not-determined") {
+    // Attempt registration whenever we are not already granted - NOT only when
+    // the status is not-determined. macOS lists an app under Screen Recording
+    // once it actually attempts a capture, so short-circuiting on "denied" means
+    // the entry never appears and there is nothing for the user to switch on.
+    if (status !== "granted") {
       try {
         await desktopCapturer.getSources({
           types: ["screen"],
           thumbnailSize: { width: 1, height: 1 }
         })
-      } catch {
-        // The prompt itself is what matters; a failure here is not fatal.
+        this.logPermission("desktopCapturer.getSources resolved")
+      } catch (error) {
+        this.logPermission(
+          `desktopCapturer.getSources threw: ${error instanceof Error ? error.message : String(error)}`
+        )
       }
       status = systemPreferences.getMediaAccessStatus("screen") as MediaAccessStatus
+      this.logPermission(`status after registration attempt=${status}`)
     }
 
     if (status !== "granted") {

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <!-- Electron requires JIT and unsigned executable memory under the
+         hardened runtime; without these a hardened-runtime signed app crashes
+         on launch. -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <!-- Needed because the bundled Electron framework is not signed by the same
+         team identifier as this local signing certificate. -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <!-- Screen capture itself is governed by TCC, not by an entitlement. It is
+         deliberately NOT listed here; adding entitlements does not grant it. -->
+  </dict>
+</plist>

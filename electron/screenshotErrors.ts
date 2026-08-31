@@ -7,8 +7,12 @@
  */
 export const APP_NAME = "Meeting Notes Coder"
 
-/** Bundle id of the stock Electron used when running from source. */
-export const DEV_BUNDLE_ID = "com.github.Electron"
+/**
+ * macOS 26 renamed this pane. Older docs (and earlier versions of this file)
+ * say "Screen Recording", which no longer matches what the user sees.
+ */
+export const SETTINGS_PATH =
+  "System Settings > Privacy & Security > Screen & System Audio Recording"
 
 /** Mirrors Electron's systemPreferences.getMediaAccessStatus return values. */
 export type MediaAccessStatus = "not-determined" | "granted" | "denied" | "restricted" | "unknown"
@@ -16,77 +20,91 @@ export type MediaAccessStatus = "not-determined" | "granted" | "denied" | "restr
 export interface ScreenshotFailureContext {
   /** app.getName() - what the running process calls itself. */
   appName?: string
-  /** app.getPath("exe") - the binary macOS attributes the request to. */
+  /** app.getPath("exe") - the binary being run. */
   exePath?: string
-  /** app.isPackaged - dev runs inside a generic Electron bundle. */
+  /** app.isPackaged - false when running from source. */
   isPackaged?: boolean
-  /** Bundle id TCC keys the decision on. */
-  bundleId?: string
+  /**
+   * True when this process was started by a shell/terminal rather than by
+   * Finder, the Dock or `open`. Decided by process.ppid !== 1.
+   */
+  launchedFromShell?: boolean
+  /** Best-effort name of the process macOS holds responsible. */
+  responsibleHint?: string
   platform?: NodeJS.Platform
+}
+
+/**
+ * Finder/Dock/`open` launches are reparented to launchd (ppid 1), so the app is
+ * responsible for itself. Any other parent means a shell started it, and macOS
+ * attributes screen capture to the app owning that shell instead.
+ */
+export function isLaunchedFromShell(ppid: number): boolean {
+  return ppid !== 1
 }
 
 const PERMISSION_DENIED =
   /could not create image from display|not authorized|screen recording|kCGErrorFailure/i
 
-const SETTINGS_PATH = "System Settings > Privacy & Security > Screen Recording"
+const RESTART =
+  "Then quit and reopen the app - macOS does not apply a grant to an already-running process."
 
 /**
  * Explains a screen-capture permission state.
  *
- * The important case is "denied". macOS never re-prompts once denied, and an
- * unpackaged run is attributed to the stock Electron bundle
- * (com.github.Electron), which is ad-hoc signed - so its signature changes on
- * every reinstall and orphans the TCC record. The result is a standing denial
- * with NO entry in the settings pane to toggle. Telling the user to "enable the
- * Electron entry" is useless when no such row exists; the record has to be reset
- * first so the app can ask again.
+ * The decisive fact is NOT the app's name or bundle id - it is which process
+ * macOS holds RESPONSIBLE. When a process is started from a shell, TCC attributes
+ * screen capture to the app that owns that shell (Terminal, iTerm, VS Code,
+ * Claude...), not to this app. So a shell-launched run consults some other
+ * entry's permission entirely, and toggling this app's own entry changes nothing.
+ * Only a Finder/Dock/`open` launch makes the app responsible for itself.
+ *
+ * Earlier versions of this message blamed a stale com.github.Electron record and
+ * recommended `tccutil reset`. That diagnosis came from probes that were
+ * themselves shell-launched, so they were reading the launching app's status
+ * rather than this app's - measuring the wrong subject entirely.
  */
 export function describeScreenCapturePermission(
   status: MediaAccessStatus,
   context: ScreenshotFailureContext = {},
 ): string {
   const name = context.appName || APP_NAME
-  const restart = "Then quit and reopen the app - macOS does not apply a grant to a running process."
+  const where = context.exePath ? `\nBinary: ${context.exePath}` : ""
 
-  if (context.isPackaged) {
-    if (status === "denied" || status === "restricted") {
-      return (
-        `Screen Recording permission was denied for "${name}". macOS will not ask again, ` +
-        `so enable it manually: ${SETTINGS_PATH}. ${restart}`
-      )
-    }
+  if (context.launchedFromShell) {
+    const responsible = context.responsibleHint
+      ? `the app that owns that shell (${context.responsibleHint})`
+      : "the app that owns that shell (your terminal, editor, or whatever ran the command)"
     return (
-      `Screen Recording permission is required. Approve the prompt, or enable "${name}" ` +
-      `under ${SETTINGS_PATH}. ${restart}`
+      `Screen capture is unavailable because this process was started from a shell. macOS ` +
+      `attributes screen capture to ${responsible}, NOT to "${name}" - so the entry for ` +
+      `"${name}" under ${SETTINGS_PATH} does not govern this run, and switching it on will ` +
+      `not help.\n` +
+      `Quit this instance and launch the packaged app from Finder (or: open -a "${name}"). ` +
+      `Only then is "${name}" responsible for itself and its own permission entry applies.` +
+      where
     )
   }
 
-  const bundleId = context.bundleId || DEV_BUNDLE_ID
-  const where = context.exePath ? `\nBinary: ${context.exePath}` : ""
-
   if (status === "denied" || status === "restricted") {
     return (
-      `Screen Recording is DENIED for the Electron bundle this app runs from, and macOS never ` +
-      `re-asks once denied. Because the development build is ad-hoc signed, the entry is often ` +
-      `missing from ${SETTINGS_PATH} entirely - so there may be nothing there to switch on.\n` +
-      `Reset the stale decision, then relaunch and trigger a capture to get a fresh prompt:\n` +
-      `    tccutil reset ScreenCapture ${bundleId}\n` +
-      `If a prompt still does not appear, add the binary manually with the "+" button in ` +
-      `${SETTINGS_PATH} (press Cmd+Shift+G in the file picker to paste a path).${where}\n` +
-      `A packaged build (npm run app:build) gets its own entry named "${name}" and avoids this.`
+      `Screen capture is denied for "${name}". Open ${SETTINGS_PATH} and switch "${name}" ON. ` +
+      `If it is already ON, the grant predates the app's current signature: switch it OFF and ` +
+      `back ON to refresh it. ${RESTART}` +
+      where
     )
   }
 
   return (
-    `Screen Recording permission is required. Trigger a capture and approve the macOS prompt. ` +
-    `The prompt will name "Electron", not "${name}", because the app is running from source.${where}`
+    `Screen capture permission has not been granted yet. Trigger a capture and approve the macOS ` +
+    `prompt, or switch "${name}" ON under ${SETTINGS_PATH}. ${RESTART}` +
+    where
   )
 }
 
 /**
- * macOS refuses screen capture without Screen Recording permission, and
- * `screencapture` reports it as "could not create image from display" - which
- * tells the user nothing.
+ * macOS refuses screen capture without permission, and `screencapture` reports
+ * it as "could not create image from display" - which tells the user nothing.
  */
 export function describeScreenshotFailure(
   raw: string,

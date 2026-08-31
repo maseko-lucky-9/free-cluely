@@ -15,7 +15,8 @@
     "watch": "tsc -p electron/tsconfig.json --watch",
     "start": "npm run app:dev",
     "dist": "npm run app:build",
-    "test": "npm run build && node test/llmhelper.test.mjs"
+    "test": "npm run build && node test/llmhelper.test.mjs",
+    "pack:mac": "npm run build && electron-builder --mac --dir --arm64 -c.mac.identity=null && bash scripts/sign-local.sh"
   },
   "build": {
     "appId": "com.electron.meeting-notes",
@@ -49,7 +50,8 @@
       ],
       "icon": "assets/icons/mac/icon.icns",
       "hardenedRuntime": true,
-      "entitlements": "assets/entitlements.mac.plist"
+      "entitlements": "assets/entitlements.mac.plist",
+      "entitlementsInherit": "assets/entitlements.mac.inherit.plist"
     },
     "win": {
       "target": [
