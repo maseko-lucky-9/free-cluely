@@ -131,13 +131,13 @@ export const ComplexitySection = ({
         <div className="flex items-start gap-2 text-[13px] leading-[1.4] text-gray-100">
           <div className="w-1 h-1 rounded-full bg-blue-400/80 mt-2 shrink-0" />
           <div>
-            <strong>Time:</strong> {timeComplexity}
+            <strong>Time:</strong> {timeComplexity ?? "not reported"}
           </div>
         </div>
         <div className="flex items-start gap-2 text-[13px] leading-[1.4] text-gray-100">
           <div className="w-1 h-1 rounded-full bg-blue-400/80 mt-2 shrink-0" />
           <div>
-            <strong>Space:</strong> {spaceComplexity}
+            <strong>Space:</strong> {spaceComplexity ?? "not reported"}
           </div>
         </div>
       </div>
@@ -536,7 +536,7 @@ const Solutions: React.FC<SolutionsProps> = ({ setView }) => {
                           <ComplexitySection
                             timeComplexity={timeComplexityData}
                             spaceComplexity={spaceComplexityData}
-                            isLoading={!timeComplexityData || !spaceComplexityData}
+                            isLoading={!solutionData}
                           />
                         )}
                       </>

@@ -115,6 +115,34 @@ const CodeComparisonSection = ({
             </p>
           </div>
         </div>
+      ) : !oldCode ? (
+        <div className="bg-[#161b22] rounded-lg overflow-hidden">
+          <div className="bg-[#2d333b] px-3 py-1.5">
+            <h3 className="text-[11px] font-medium text-gray-200">
+              Updated Version{" "}
+              <span className="text-gray-400 font-normal">
+                - no previous version to compare against
+              </span>
+            </h3>
+          </div>
+          <div className="p-3 overflow-x-auto">
+            <SyntaxHighlighter
+              language={detectLanguage(newCode || "")}
+              style={dracula}
+              customStyle={{
+                maxWidth: "100%",
+                margin: 0,
+                padding: "1rem",
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-all"
+              }}
+              wrapLines={true}
+              showLineNumbers={true}
+            >
+              {newCode || ""}
+            </SyntaxHighlighter>
+          </div>
+        </div>
       ) : (
         <div className="flex flex-row gap-0.5 bg-[#161b22] rounded-lg overflow-hidden">
           {/* Previous Code */}
@@ -270,17 +298,18 @@ const Debug: React.FC<DebugProps> = ({ isProcessing, setIsProcessing }) => {
   useEffect(() => {
     // Try to get the new solution data from cache first
     const newSolution = queryClient.getQueryData(["new_solution"]) as {
-      old_code: string
-      new_code: string
-      thoughts: string[]
-      time_complexity: string
-      space_complexity: string
+      old_code: string | null
+      new_code: string | null
+      code?: string
+      thoughts?: string[]
+      time_complexity?: string
+      space_complexity?: string
     } | null
 
     // If we have cached data, set all state variables to the cached data
     if (newSolution) {
       setOldCode(newSolution.old_code || null)
-      setNewCode(newSolution.new_code || null)
+      setNewCode(newSolution.new_code || newSolution.code || null)
       setThoughtsData(newSolution.thoughts || null)
       setTimeComplexityData(newSolution.time_complexity || null)
       setSpaceComplexityData(newSolution.space_complexity || null)
@@ -392,21 +421,21 @@ const Debug: React.FC<DebugProps> = ({ isProcessing, setIsProcessing }) => {
                   </div>
                 )
               }
-              isLoading={!thoughtsData}
+              isLoading={isProcessing}
             />
 
             {/* Code Comparison Section */}
             <CodeComparisonSection
               oldCode={oldCode}
               newCode={newCode}
-              isLoading={!oldCode || !newCode}
+              isLoading={isProcessing}
             />
 
             {/* Complexity Section */}
             <ComplexitySection
               timeComplexity={timeComplexityData}
               spaceComplexity={spaceComplexityData}
-              isLoading={!timeComplexityData || !spaceComplexityData}
+              isLoading={isProcessing}
             />
           </div>
         </div>

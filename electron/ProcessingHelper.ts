@@ -3,6 +3,8 @@
 import { AppState } from "./main"
 import { LLMHelper } from "./LLMHelper"
 import { loadLlmConfig } from "./llmConfig"
+import { logEvent, errText } from "./appLog"
+import { buildDebugPayload } from "./debugPayload"
 import dotenv from "dotenv"
 
 dotenv.config()
@@ -54,7 +56,7 @@ export class ProcessingHelper {
       this.currentProcessingAbortController = new AbortController()
 
       try {
-        console.log("[ProcessingHelper] Solving problem from image:", lastPath);
+        logEvent(`queue: solveImageProblem -> ${lastPath}`);
         const result = await this.llmHelper.solveImageProblem(
           lastPath,
           this.currentProcessingAbortController.signal
@@ -88,10 +90,11 @@ export class ProcessingHelper {
           }
         };
         console.log("[ProcessingHelper] Sending solution for language:", result.solution.language);
+        logEvent("queue: emitting SOLUTION_SUCCESS");
         mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.SOLUTION_SUCCESS, solutionPayload);
       } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : String(error)
-        console.error("Image problem-solving error:", message)
+        const message = errText(error)
+        logEvent(`queue: FAILED emitting INITIAL_SOLUTION_ERROR: ${message}`)
         mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.INITIAL_SOLUTION_ERROR, message)
       } finally {
         this.currentProcessingAbortController = null
@@ -106,6 +109,7 @@ export class ProcessingHelper {
         return
       }
 
+      logEvent("DEBUG flow start")
       mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.DEBUG_START)
       this.currentExtraProcessingAbortController = new AbortController()
       const signal = this.currentExtraProcessingAbortController.signal
@@ -132,16 +136,20 @@ export class ProcessingHelper {
           }
           this.appState.setProblemInfo(newProblemInfo)
 
+          logEvent("debug: emitting DEBUG_SUCCESS (no previous solution)")
           mainWindow.webContents.send(
             this.appState.PROCESSING_EVENTS.DEBUG_SUCCESS,
-            { solution: result.solution }
+            buildDebugPayload(null, result.solution)
           )
           return
         }
 
+        logEvent("debug: generateSolution ->")
         const currentSolution = await this.llmHelper.generateSolution(problemInfo, signal)
+        logEvent("debug: generateSolution OK")
         const currentCode = currentSolution.solution.code
 
+        logEvent(`debug: debugSolutionWithImages -> (${extraScreenshotQueue.length} images)`)
         const debugResult = await this.llmHelper.debugSolutionWithImages(
           problemInfo,
           currentCode,
@@ -150,14 +158,15 @@ export class ProcessingHelper {
         )
 
         this.appState.setHasDebugged(true)
+        logEvent("debug: emitting DEBUG_SUCCESS")
         mainWindow.webContents.send(
           this.appState.PROCESSING_EVENTS.DEBUG_SUCCESS,
-          debugResult
+          buildDebugPayload(currentCode, debugResult.solution)
         )
 
       } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : String(error)
-        console.error("Debug processing error:", message)
+        const message = errText(error)
+        logEvent(`debug: FAILED emitting DEBUG_ERROR: ${message}`)
         mainWindow.webContents.send(
           this.appState.PROCESSING_EVENTS.DEBUG_ERROR,
           message

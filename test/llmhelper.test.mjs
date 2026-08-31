@@ -390,6 +390,38 @@ await check("an unrelated capture failure is passed through, not mislabelled", (
     "must not blame permissions for a disk error");
 });
 
+
+// --- debug payload shape ----------------------------------------------------
+
+const { buildDebugPayload } = require("../dist-electron/debugPayload.js");
+
+await check("debug payload carries the fields the diff view reads", () => {
+  // The view reads old_code/new_code; the LLM schema emits neither. Omitting them
+  // left `!oldCode || !newCode` true forever and the section skeletoned.
+  const out = buildDebugPayload("def old(): pass", {
+    code: "def better(): pass",
+    explanation: "tightened",
+    thoughts: ["use a set"],
+  });
+  assert.equal(out.solution.old_code, "def old(): pass");
+  assert.equal(out.solution.new_code, "def better(): pass", "new_code mirrors solution.code");
+  assert.equal(out.solution.explanation, "tightened", "existing fields survive");
+  assert.deepEqual(out.solution.thoughts, ["use a set"]);
+});
+
+await check("a debug run with no previous solution yields old_code null, not undefined", () => {
+  const out = buildDebugPayload(null, { code: "x = 1" });
+  assert.equal(out.solution.old_code, null, "must be explicit null so the view can branch");
+  assert.equal(out.solution.new_code, "x = 1");
+  assert.ok("old_code" in out.solution, "key must be present even when null");
+});
+
+await check("a solution missing code still produces both keys", () => {
+  const out = buildDebugPayload(null, {});
+  assert.equal(out.solution.old_code, null);
+  assert.equal(out.solution.new_code, null);
+});
+
 // --- report -----------------------------------------------------------------
 
 server.close();

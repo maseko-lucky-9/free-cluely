@@ -1,4 +1,5 @@
 import fs from "fs";
+import { logEvent } from "./appLog";
 
 interface OllamaGenerateResponse {
   response?: string;
@@ -276,6 +277,10 @@ export class LLMHelper {
       }
 
       const data: OllamaGenerateResponse = await res.json();
+      logEvent(
+        `ollama reply status=${res.status} responseChars=${(data.response ?? "").length} ` +
+          `thinkingChars=${(data.thinking ?? "").length} done_reason=${data.done_reason ?? "-"}`
+      );
       if (data.error) throw new Error(`Ollama error: ${data.error}`);
 
       if (data.done_reason === "length") {
@@ -427,7 +432,7 @@ export class LLMHelper {
       }
     }
 
-    console.error(`[LLMHelper] Unusable ${what} output:`, text.slice(0, 800));
+    logEvent(`parse FAILED for ${what}; first 300 chars: ${text.slice(0, 300).replace(/\s+/g, " ")}`);
     throw new Error(
       `${this.ollamaModel} did not return usable ${what}. ` +
         "This usually means the model is too small for structured output — try a stronger one.",
@@ -466,7 +471,7 @@ export class LLMHelper {
           space_complexity: { type: "string" },
           thoughts: { type: "array", items: { type: "string" } },
         },
-        required: ["code", "explanation", "thoughts"],
+        required: ["code", "explanation", "thoughts", "time_complexity", "space_complexity"],
       },
     },
     required: ["solution"],
