@@ -32,17 +32,15 @@ interface ElectronAPI {
   moveWindowDown: () => Promise<void>
   analyzeAudioFromBase64: (data: string, mimeType: string) => Promise<{ text: string; timestamp: number }>
   analyzeAudioFile: (path: string) => Promise<{ text: string; timestamp: number }>
-  analyzeImageFile: (path: string) => Promise<void>
+  analyzeImageFile: (path: string) => Promise<{ text: string; timestamp: number }>
   quitApp: () => Promise<void>
   
   // LLM Model Management
-  getCurrentLlmConfig: () => Promise<{ provider: "ollama" | "gemini"; model: string; isOllama: boolean }>
+  getCurrentLlmConfig: () => Promise<{ provider: "ollama"; model: string; isOllama: boolean }>
   getAvailableOllamaModels: () => Promise<string[]>
   switchToOllama: (model?: string, url?: string) => Promise<{ success: boolean; error?: string }>
-  switchToGemini: (apiKey?: string) => Promise<{ success: boolean; error?: string }>
   testLlmConnection: () => Promise<{ success: boolean; error?: string }>
-  
-  invoke: (channel: string, ...args: any[]) => Promise<any>
+  llmChat: (message: string) => Promise<string>
 }
 
 export const PROCESSING_EVENTS = {
@@ -112,11 +110,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
   },
 
   onDebugSuccess: (callback: (data: any) => void) => {
-    ipcRenderer.on("debug-success", (_event, data) => callback(data))
+    const subscription = (_: any, data: any) => callback(data)
+    ipcRenderer.on(PROCESSING_EVENTS.DEBUG_SUCCESS, subscription)
     return () => {
-      ipcRenderer.removeListener("debug-success", (_event, data) =>
-        callback(data)
-      )
+      ipcRenderer.removeListener(PROCESSING_EVENTS.DEBUG_SUCCESS, subscription)
     }
   },
   onDebugError: (callback: (error: string) => void) => {
@@ -178,14 +175,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
   analyzeAudioFromBase64: (data: string, mimeType: string) => ipcRenderer.invoke("analyze-audio-base64", data, mimeType),
   analyzeAudioFile: (path: string) => ipcRenderer.invoke("analyze-audio-file", path),
   analyzeImageFile: (path: string) => ipcRenderer.invoke("analyze-image-file", path),
+  llmChat: (message: string) => ipcRenderer.invoke("llm-chat", message),
   quitApp: () => ipcRenderer.invoke("quit-app"),
   
   // LLM Model Management
   getCurrentLlmConfig: () => ipcRenderer.invoke("get-current-llm-config"),
   getAvailableOllamaModels: () => ipcRenderer.invoke("get-available-ollama-models"),
   switchToOllama: (model?: string, url?: string) => ipcRenderer.invoke("switch-to-ollama", model, url),
-  switchToGemini: (apiKey?: string) => ipcRenderer.invoke("switch-to-gemini", apiKey),
-  testLlmConnection: () => ipcRenderer.invoke("test-llm-connection"),
-  
-  invoke: (channel: string, ...args: any[]) => ipcRenderer.invoke(channel, ...args)
+  testLlmConnection: () => ipcRenderer.invoke("test-llm-connection")
 } as ElectronAPI)

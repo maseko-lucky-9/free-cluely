@@ -2,13 +2,10 @@
 
 import { AppState } from "./main"
 import { LLMHelper } from "./LLMHelper"
+import { loadLlmConfig } from "./llmConfig"
 import dotenv from "dotenv"
 
 dotenv.config()
-
-const isDev = process.env.NODE_ENV === "development"
-const isDevTest = process.env.IS_DEV_TEST === "true"
-const MOCK_API_WAIT_TIME = Number(process.env.MOCK_API_WAIT_TIME) || 500
 
 export class ProcessingHelper {
   private appState: AppState
@@ -18,23 +15,14 @@ export class ProcessingHelper {
 
   constructor(appState: AppState) {
     this.appState = appState
-    
-    // Check if user wants to use Ollama
-    const useOllama = process.env.USE_OLLAMA === "true"
-    const ollamaModel = process.env.OLLAMA_MODEL // Don't set default here, let LLMHelper auto-detect
-    const ollamaUrl = process.env.OLLAMA_URL || "http://localhost:11434"
-    
-    if (useOllama) {
-      console.log("[ProcessingHelper] Initializing with Ollama")
-      this.llmHelper = new LLMHelper(undefined, true, ollamaModel, ollamaUrl)
-    } else {
-      const apiKey = process.env.GEMINI_API_KEY
-      if (!apiKey) {
-        throw new Error("GEMINI_API_KEY not found in environment variables. Set GEMINI_API_KEY or enable Ollama with USE_OLLAMA=true")
-      }
-      console.log("[ProcessingHelper] Initializing with Gemini")
-      this.llmHelper = new LLMHelper(apiKey, false)
-    }
+
+    // Local-only: Ollama is the sole provider. No API key, no cloud fallback.
+    const stored = loadLlmConfig()
+    const ollamaModel = stored.model || process.env.OLLAMA_MODEL || undefined
+    const ollamaUrl = stored.url || process.env.OLLAMA_URL || "http://localhost:11434"
+
+    console.log("[ProcessingHelper] Initializing with Ollama")
+    this.llmHelper = new LLMHelper(ollamaModel, ollamaUrl)
   }
 
   public async processScreenshots(): Promise<void> {
@@ -50,37 +38,32 @@ export class ProcessingHelper {
         return
       }
 
-      // Check if last screenshot is an audio file
       const allPaths = this.appState.getScreenshotHelper().getScreenshotQueue();
       const lastPath = allPaths[allPaths.length - 1];
+
+      // Audio is unsupported locally. LLMHelper throws rather than inventing a
+      // transcript, so surface that as a real error instead of a fake result.
       if (lastPath.endsWith('.mp3') || lastPath.endsWith('.wav')) {
-        mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.INITIAL_START);
-        this.appState.setView('solutions');
-        try {
-          const audioResult = await this.llmHelper.analyzeAudioFile(lastPath);
-          mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.PROBLEM_EXTRACTED, audioResult);
-          this.appState.setProblemInfo({ problem_statement: audioResult.text, input_format: {}, output_format: {}, constraints: [], test_cases: [] });
-          return;
-        } catch (err: any) {
-          console.error('Audio processing error:', err);
-          mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.INITIAL_SOLUTION_ERROR, err.message);
-          return;
-        }
+        mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.INITIAL_SOLUTION_ERROR,
+          "Audio analysis is not available in local mode.");
+        return;
       }
 
-      // NEW: Use problem-solving flow instead of just describing the image
       mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.INITIAL_START)
       this.appState.setView("solutions")
       this.currentProcessingAbortController = new AbortController()
+
       try {
-        // Use the new solveImageProblem method that extracts, classifies, and solves
         console.log("[ProcessingHelper] Solving problem from image:", lastPath);
-        const result = await this.llmHelper.solveImageProblem(lastPath);
-        
-        // Set problem info for the state
+        const result = await this.llmHelper.solveImageProblem(
+          lastPath,
+          this.currentProcessingAbortController.signal
+        );
+
         const problemInfo = {
           problem_statement: result.problemInfo.problem_statement,
           problem_type: result.problemInfo.problem_type,
+          language: result.problemInfo.language,
           input_format: result.problemInfo.input_format,
           output_format: result.problemInfo.output_format,
           complexity: result.problemInfo.complexity,
@@ -88,28 +71,28 @@ export class ProcessingHelper {
           validation_type: result.problemInfo.validation_type,
           difficulty: result.problemInfo.difficulty
         };
-        
-        // Send problem extracted event first
+
         mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.PROBLEM_EXTRACTED, problemInfo);
         this.appState.setProblemInfo(problemInfo);
-        
-        // Then send the solution
-        if (result.solution) {
-          const solutionPayload = {
-            solution: {
-              code: result.solution.code || "",
-              thoughts: result.solution.thoughts || [],
-              time_complexity: result.solution.time_complexity || result.problemInfo.complexity?.time || "N/A",
-              space_complexity: result.solution.space_complexity || result.problemInfo.complexity?.space || "N/A",
-              explanation: result.solution.explanation || ""
-            }
-          };
-          console.log("[ProcessingHelper] Sending solution:", solutionPayload);
-          mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.SOLUTION_SUCCESS, solutionPayload);
-        }
-      } catch (error: any) {
-        console.error("Image problem-solving error:", error)
-        mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.INITIAL_SOLUTION_ERROR, error.message)
+
+        // solveImageProblem throws unless a usable solution was parsed, so this
+        // is always a real answer — never a fabricated placeholder.
+        const solutionPayload = {
+          solution: {
+            code: result.solution.code,
+            language: result.solution.language,
+            thoughts: result.solution.thoughts || [],
+            time_complexity: result.solution.time_complexity || result.problemInfo.complexity?.time || "N/A",
+            space_complexity: result.solution.space_complexity || result.problemInfo.complexity?.space || "N/A",
+            explanation: result.solution.explanation || ""
+          }
+        };
+        console.log("[ProcessingHelper] Sending solution for language:", result.solution.language);
+        mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.SOLUTION_SUCCESS, solutionPayload);
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error)
+        console.error("Image problem-solving error:", message)
+        mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.INITIAL_SOLUTION_ERROR, message)
       } finally {
         this.currentProcessingAbortController = null
       }
@@ -125,23 +108,45 @@ export class ProcessingHelper {
 
       mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.DEBUG_START)
       this.currentExtraProcessingAbortController = new AbortController()
+      const signal = this.currentExtraProcessingAbortController.signal
 
       try {
-        // Get problem info and current solution
         const problemInfo = this.appState.getProblemInfo()
+
+        // If no problem info exists, treat the extra screenshot as a new problem
         if (!problemInfo) {
-          throw new Error("No problem info available")
+          console.log("[ProcessingHelper] No problem info available, processing extra screenshot as new problem")
+          const lastExtraPath = extraScreenshotQueue[extraScreenshotQueue.length - 1]
+          const result = await this.llmHelper.solveImageProblem(lastExtraPath, signal)
+
+          const newProblemInfo = {
+            problem_statement: result.problemInfo.problem_statement,
+            problem_type: result.problemInfo.problem_type,
+            language: result.problemInfo.language,
+            input_format: result.problemInfo.input_format,
+            output_format: result.problemInfo.output_format,
+            complexity: result.problemInfo.complexity,
+            test_cases: result.problemInfo.test_cases || [] as any[],
+            validation_type: result.problemInfo.validation_type,
+            difficulty: result.problemInfo.difficulty
+          }
+          this.appState.setProblemInfo(newProblemInfo)
+
+          mainWindow.webContents.send(
+            this.appState.PROCESSING_EVENTS.DEBUG_SUCCESS,
+            { solution: result.solution }
+          )
+          return
         }
 
-        // Get current solution from state
-        const currentSolution = await this.llmHelper.generateSolution(problemInfo)
+        const currentSolution = await this.llmHelper.generateSolution(problemInfo, signal)
         const currentCode = currentSolution.solution.code
 
-        // Debug the solution using vision model
         const debugResult = await this.llmHelper.debugSolutionWithImages(
           problemInfo,
           currentCode,
-          extraScreenshotQueue
+          extraScreenshotQueue,
+          signal
         )
 
         this.appState.setHasDebugged(true)
@@ -150,11 +155,12 @@ export class ProcessingHelper {
           debugResult
         )
 
-      } catch (error: any) {
-        console.error("Debug processing error:", error)
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error)
+        console.error("Debug processing error:", message)
         mainWindow.webContents.send(
           this.appState.PROCESSING_EVENTS.DEBUG_ERROR,
-          error.message
+          message
         )
       } finally {
         this.currentExtraProcessingAbortController = null
@@ -163,6 +169,8 @@ export class ProcessingHelper {
   }
 
   public cancelOngoingRequests(): void {
+    // These signals are now actually attached to the outgoing fetch, so aborting
+    // stops the local generation instead of leaving it running on the GPU.
     if (this.currentProcessingAbortController) {
       this.currentProcessingAbortController.abort()
       this.currentProcessingAbortController = null
@@ -177,11 +185,9 @@ export class ProcessingHelper {
   }
 
   public async processAudioBase64(data: string, mimeType: string) {
-    // Directly use LLMHelper to analyze inline base64 audio
     return this.llmHelper.analyzeAudioFromBase64(data, mimeType);
   }
 
-  // Add audio file processing method
   public async processAudioFile(filePath: string) {
     return this.llmHelper.analyzeAudioFile(filePath);
   }

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Tray, Menu, nativeImage } from "electron"
+import { app, BrowserWindow, Tray, Menu, nativeImage, session } from "electron"
 import { initializeIpcHandlers } from "./ipcHandlers"
 import { WindowHelper } from "./WindowHelper"
 import { ScreenshotHelper } from "./ScreenshotHelper"
@@ -276,6 +276,26 @@ async function initializeApp() {
 
   app.whenReady().then(() => {
     console.log("App is ready")
+
+    // TASK-9: Enforce Content Security Policy
+    session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+      callback({
+        responseHeaders: {
+          ...details.responseHeaders,
+          'Content-Security-Policy':
+            "default-src 'self'; " +
+            "script-src 'self'; " +
+            "style-src 'self' 'unsafe-inline'; " +
+            "connect-src 'self' https://generativelanguage.googleapis.com https://localhost:* http://localhost:*; " +
+            "img-src 'self' data:; " +
+            "font-src 'self'; " +
+            "media-src 'self' mediastream:; " +
+            "object-src 'none'; " +
+            "frame-src 'none';"
+        }
+      })
+    })
+
     appState.createWindow()
     appState.createTray()
     // Register global shortcuts using ShortcutsHelper

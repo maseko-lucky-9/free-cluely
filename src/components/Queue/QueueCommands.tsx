@@ -111,18 +111,16 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
           </div>
         )}
 
-        {/* Voice Recording Button */}
+        {/* Voice Recording - disabled: Ollama's /api/generate cannot accept audio.
+            Previously this dropped the audio and let the model invent a transcript. */}
         <div className="flex items-center gap-2">
           <button
-            className={`bg-white/10 hover:bg-white/20 transition-colors rounded-md px-2 py-1 text-[11px] leading-none text-white/70 flex items-center gap-1 ${isRecording ? 'bg-red-500/70 hover:bg-red-500/90' : ''}`}
-            onClick={handleRecordClick}
+            className="bg-white/5 rounded-md px-2 py-1 text-[11px] leading-none text-white/30 flex items-center gap-1 cursor-not-allowed"
+            disabled
             type="button"
+            title="Audio analysis is unavailable in local mode - Ollama cannot process audio."
           >
-            {isRecording ? (
-              <span className="animate-pulse">● Stop Recording</span>
-            ) : (
-              <span>🎤 Record Voice</span>
-            )}
+            <span>&#127908; Voice (unavailable locally)</span>
           </button>
         </div>
 

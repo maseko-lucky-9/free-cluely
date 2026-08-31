@@ -1,7 +1,9 @@
 // ipcHandlers.ts
 
 import { ipcMain, app } from "electron"
+import path from "node:path"
 import { AppState } from "./main"
+import { saveLlmConfig } from "./llmConfig"
 
 export function initializeIpcHandlers(appState: AppState): void {
   ipcMain.handle(
@@ -13,8 +15,13 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   )
 
-  ipcMain.handle("delete-screenshot", async (event, path: string) => {
-    return appState.deleteScreenshot(path)
+  ipcMain.handle("delete-screenshot", async (event, filePath: string) => {
+    const resolved = path.resolve(filePath)
+    const allowedDir = path.resolve(app.getPath("userData"))
+    if (!resolved.startsWith(allowedDir)) {
+      return { success: false, error: "Path outside allowed directory" }
+    }
+    return appState.deleteScreenshot(filePath)
   })
 
   ipcMain.handle("take-screenshot", async () => {
@@ -82,9 +89,14 @@ export function initializeIpcHandlers(appState: AppState): void {
   })
 
   // IPC handler for analyzing audio from file path
-  ipcMain.handle("analyze-audio-file", async (event, path: string) => {
+  ipcMain.handle("analyze-audio-file", async (event, filePath: string) => {
     try {
-      const result = await appState.processingHelper.processAudioFile(path)
+      const resolved = path.resolve(filePath)
+      const allowedDir = path.resolve(app.getPath("userData"))
+      if (!resolved.startsWith(allowedDir)) {
+        throw new Error("Path outside allowed directory")
+      }
+      const result = await appState.processingHelper.processAudioFile(filePath)
       return result
     } catch (error: any) {
       console.error("Error in analyze-audio-file handler:", error)
@@ -93,9 +105,14 @@ export function initializeIpcHandlers(appState: AppState): void {
   })
 
   // IPC handler for analyzing image from file path
-  ipcMain.handle("analyze-image-file", async (event, path: string) => {
+  ipcMain.handle("analyze-image-file", async (event, filePath: string) => {
     try {
-      const result = await appState.processingHelper.getLLMHelper().analyzeImageFile(path)
+      const resolved = path.resolve(filePath)
+      const allowedDir = path.resolve(app.getPath("userData"))
+      if (!resolved.startsWith(allowedDir)) {
+        throw new Error("Path outside allowed directory")
+      }
+      const result = await appState.processingHelper.getLLMHelper().analyzeImageFile(filePath)
       return result
     } catch (error: any) {
       console.error("Error in analyze-image-file handler:", error)
@@ -103,12 +120,12 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   })
 
-  ipcMain.handle("gemini-chat", async (event, message: string) => {
+  ipcMain.handle("llm-chat", async (event, message: string) => {
     try {
-      const result = await appState.processingHelper.getLLMHelper().chatWithGemini(message);
+      const result = await appState.processingHelper.getLLMHelper().chat(message);
       return result;
     } catch (error: any) {
-      console.error("Error in gemini-chat handler:", error);
+      console.error("Error in llm-chat handler:", error);
       throw error;
     }
   });
@@ -156,7 +173,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   ipcMain.handle("get-available-ollama-models", async () => {
     try {
       const llmHelper = appState.processingHelper.getLLMHelper();
-      const models = await llmHelper.getOllamaModels();
+      const models = await llmHelper.getVisionModels();
       return models;
     } catch (error: any) {
       console.error("Error getting Ollama models:", error);
@@ -168,6 +185,8 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const llmHelper = appState.processingHelper.getLLMHelper();
       await llmHelper.switchToOllama(model, url);
+      // Only persisted once switchToOllama has validated the model.
+      saveLlmConfig({ model: llmHelper.getCurrentModel(), url: llmHelper.getOllamaUrl() });
       return { success: true };
     } catch (error: any) {
       console.error("Error switching to Ollama:", error);
@@ -175,16 +194,6 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  ipcMain.handle("switch-to-gemini", async (_, apiKey?: string) => {
-    try {
-      const llmHelper = appState.processingHelper.getLLMHelper();
-      await llmHelper.switchToGemini(apiKey);
-      return { success: true };
-    } catch (error: any) {
-      console.error("Error switching to Gemini:", error);
-      return { success: false, error: error.message };
-    }
-  });
 
   ipcMain.handle("test-llm-connection", async () => {
     try {

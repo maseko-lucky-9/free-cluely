@@ -24,27 +24,26 @@ cd free-cluely
 
 2. Install dependencies:
 ```bash
-# If you encounter Sharp/Python build errors, use this:
-SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm install --ignore-scripts
-npm rebuild sharp
-
-# Or for normal installation:
 npm install
+```
+
+npm 11 blocks package install scripts by default. Electron's postinstall
+downloads its binary, so it is pre-approved in package.json under
+"allowScripts". If the app ever fails to start with *"Electron failed to
+install correctly"*, that approval has gone stale — re-run:
+```bash
+npm install-scripts approve electron
+npm rebuild electron
 ```
 
 3. Set up environment variables:
    - Create a file named `.env` in the root folder
    
-   **For Gemini (Cloud AI):**
-   ```env
-   GEMINI_API_KEY=your_api_key_here
-   ```
-   
-   **For Ollama (Local/Private AI):**
    ```env
    USE_OLLAMA=true
-   OLLAMA_MODEL=llama3.2
    OLLAMA_URL=http://localhost:11434
+   # Optional - auto-selects an installed vision model if unset
+   # OLLAMA_MODEL=qwen2.5vl:7b
    ```
    
    - Save the file
@@ -68,54 +67,24 @@ npm run dist
 ```
 The built app will be in the `release` folder.
 
-## 🤖 AI Provider Options
+## 🤖 Local AI (Ollama)
 
-### Ollama (Recommended for Privacy)
-**Pros:**
-- 100% private - data never leaves your computer
-- No API costs
-- Works offline
-- Supports many models: llama3.2, codellama, mistral, etc.
+This app runs entirely on your own machine. No API key, no cloud calls, no usage costs.
+
+**The model must support vision.** Every request sends a screenshot, so text-only
+models (llama3.2, codellama, mistral, deepseek-coder) cannot be used - Ollama rejects
+them with `model does not support multimodal requests`. Embedding models
+(nomic-embed-text, bge-m3, mxbai-embed-large) cannot generate at all and are never
+auto-selected.
 
 **Setup:**
 1. Install Ollama from [ollama.ai](https://ollama.ai)
-2. Pull a model: `ollama pull llama3.2`
-3. Set environment variables as shown above
+2. Pull a vision model: `ollama pull qwen3.5:9b`
+3. Start it: `ollama serve`
 
-### Google Gemini
-**Pros:**
-- Latest AI technology
-- Fastest responses
-- Best accuracy for complex tasks
+The app auto-selects the first installed vision-capable model unless `OLLAMA_MODEL`
+names one explicitly.
 
-**Cons:**
-- Requires API key and internet
-- Data sent to Google servers
-- Usage costs apply
-
-### ⚠️ Important Notes
-
-1. **Closing the App**: 
-   - Press `Cmd + Q` (Mac) or `Ctrl + Q` (Windows/Linux) to quit
-   - Or use Activity Monitor/Task Manager to close `Interview Coder`
-   - The X button currently doesn't work (known issue)
-
-2. **If the app doesn't start**:
-   - Make sure no other app is using port 5180
-   - Try killing existing processes:
-     ```bash
-     # Find processes using port 5180
-     lsof -i :5180
-     # Kill them (replace [PID] with the process ID)
-     kill [PID]
-     ```
-   - For Ollama users: Make sure Ollama is running (`ollama serve`)
-
-3. **Keyboard Shortcuts**:
-   - `Cmd/Ctrl + B`: Toggle window visibility
-   - `Cmd/Ctrl + H`: Take screenshot
-   - 'Cmd/Enter': Get solution
-   - `Cmd/Ctrl + Arrow Keys`: Move window
 
 ## 🔧 Troubleshooting
 
@@ -132,25 +101,21 @@ The built app will be in the `release` folder.
 
 ### Common Solutions
 
-#### Sharp/Python Build Errors
-If you see `gyp ERR! find Python` or Sharp build errors:
+#### "Electron failed to install correctly"
+npm 11 blocked electron's postinstall, so its binary was never downloaded:
 ```bash
-# Solution 1: Use prebuilt binaries
-rm -rf node_modules package-lock.json
-SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm install --ignore-scripts
-npm rebuild sharp
-
-# Solution 2: Or install Python (if you prefer building from source)
-brew install python3  # macOS
-# Then run: npm install
+npm install-scripts approve electron
+npm rebuild electron
 ```
 
 #### General Installation Issues
 If you see other errors:
 1. Delete the `node_modules` folder
-2. Delete `package-lock.json` 
-3. Run `npm install` again
-4. Try running with `npm start`
+2. Run `npm ci` (installs exactly what the lockfile pins)
+3. Try running with `npm start`
+
+This project uses **npm**. Do not run `pnpm install` — a second lockfile would
+resolve different versions from the same package.json.
 
 ### Platform-Specific Notes
 - **Windows**: App now works on Windows 10/11
@@ -169,10 +134,9 @@ If you see other errors:
 - AI analyzes images, documents, presentations, or problems
 - Get instant explanations, answers, and solutions
 
-### **Audio Intelligence**
-- Process audio files and recordings
-- Real-time transcription and analysis
-- Perfect for meeting notes and content review
+### **Audio Intelligence** *(unavailable in local mode)*
+- Ollama's `/api/generate` cannot accept audio, so this is disabled in the UI
+- Previously the audio was silently dropped and the model invented a transcript
 
 ### **Contextual Chat**
 - Chat with AI about anything you see on screen
@@ -225,16 +189,22 @@ If you see other errors:
 | **Open Source** | Full transparency | Closed source |
 | **Customization** | Fully customizable | Limited options |
 | **Data Control** | You own your data | Third-party servers |
-| **Offline Mode** | Yes (with Ollama) | No |
+| **Offline Mode** | Yes | No |
 
 ## Technical Details
 
 ### **AI Models Supported**
-- **Gemini 2.0 Flash** - Latest Google AI with vision capabilities
-- **Llama 3.2** - Meta's advanced local model via Ollama
-- **CodeLlama** - Specialized coding assistance
-- **Mistral** - Lightweight, fast responses
-- **Custom Models** - Any Ollama-compatible model
+Any Ollama model with the `vision` capability. Benchmarked on Apple M5 Pro / 24 GB
+over 70 sequential runs:
+
+| model | verdict |
+|---|---|
+| **qwen3.5:9b** | **Recommended.** 31/31 valid JSON, 20/20 executed-correct on easy problems, 6.0 GB fully GPU-resident, ~6.6s extract / ~8.8s solve. Fails visibly. |
+| qwen2.5vl:7b | Fastest, but on hard problems returns schema-valid JSON whose `code` is just `using System;` - a silent wrong answer. |
+| gemma4:12b / gemma4:latest | Downsample images so aggressively they hallucinate examples that aren't on screen. Disqualified. |
+| qwen3.6:27b | 117s per response, 18 GB with CPU spill. Disqualified. |
+
+Text-only models are rejected at startup with a clear message.
 
 ### **System Requirements**
 ```bash

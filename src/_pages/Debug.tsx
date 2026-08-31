@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef } from "react"
 import { useQuery, useQueryClient } from "react-query"
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
 import { dracula } from "react-syntax-highlighter/dist/esm/styles/prism"
-import { ComplexitySection, ContentSection } from "./Solutions"
+import { ComplexitySection, ContentSection, detectLanguage } from "./Solutions"
 import ScreenshotQueue from "../components/Queue/ScreenshotQueue"
 import {
   Toast,
@@ -126,7 +126,7 @@ const CodeComparisonSection = ({
             </div>
             <div className="p-3 overflow-x-auto">
               <SyntaxHighlighter
-                language="python"
+                language={detectLanguage(oldCode || "")}
                 style={dracula}
                 customStyle={{
                   maxWidth: "100%",
@@ -163,7 +163,7 @@ const CodeComparisonSection = ({
             </div>
             <div className="p-3 overflow-x-auto">
               <SyntaxHighlighter
-                language="python"
+                language={detectLanguage(newCode || "")}
                 style={dracula}
                 customStyle={{
                   maxWidth: "100%",

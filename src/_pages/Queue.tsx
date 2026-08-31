@@ -28,13 +28,13 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
   const contentRef = useRef<HTMLDivElement>(null)
 
   const [chatInput, setChatInput] = useState("")
-  const [chatMessages, setChatMessages] = useState<{role: "user"|"gemini", text: string}[]>([])
+  const [chatMessages, setChatMessages] = useState<{role: "user"|"assistant", text: string}[]>([])
   const [chatLoading, setChatLoading] = useState(false)
   const [isChatOpen, setIsChatOpen] = useState(false)
   const chatInputRef = useRef<HTMLInputElement>(null)
   
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
-  const [currentModel, setCurrentModel] = useState<{ provider: string; model: string }>({ provider: "gemini", model: "gemini-3-pro-preview" })
+  const [currentModel, setCurrentModel] = useState<{ provider: string; model: string }>({ provider: "ollama", model: "" })
 
   const barRef = useRef<HTMLDivElement>(null)
 
@@ -92,10 +92,10 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
     setChatLoading(true)
     setChatInput("")
     try {
-      const response = await window.electronAPI.invoke("gemini-chat", chatInput)
-      setChatMessages((msgs) => [...msgs, { role: "gemini", text: response }])
+      const response = await window.electronAPI.llmChat(chatInput)
+      setChatMessages((msgs) => [...msgs, { role: "assistant", text: response }])
     } catch (err) {
-      setChatMessages((msgs) => [...msgs, { role: "gemini", text: "Error: " + String(err) }])
+      setChatMessages((msgs) => [...msgs, { role: "assistant", text: "Error: " + String(err) }])
     } finally {
       setChatLoading(false)
       chatInputRef.current?.focus()
@@ -140,11 +140,7 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
       window.electronAPI.onScreenshotTaken(() => refetch()),
       window.electronAPI.onResetView(() => refetch()),
       window.electronAPI.onSolutionError((error: string) => {
-        showToast(
-          "Processing Failed",
-          "There was an error processing your screenshots.",
-          "error"
-        )
+        showToast("Processing Failed", error, "error")
         setView("queue")
         console.error("Processing error:", error)
       }),
@@ -163,32 +159,6 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
     }
   }, [isTooltipVisible, tooltipHeight])
 
-  // Seamless screenshot-to-LLM flow
-  useEffect(() => {
-    // Listen for screenshot taken event
-    const unsubscribe = window.electronAPI.onScreenshotTaken(async (data) => {
-      // Refetch screenshots to update the queue
-      await refetch();
-      // Show loading in chat
-      setChatLoading(true);
-      try {
-        // Get the latest screenshot path
-        const latest = data?.path || (Array.isArray(data) && data.length > 0 && data[data.length - 1]?.path);
-        if (latest) {
-          // Call the LLM to process the screenshot
-          const response = await window.electronAPI.invoke("analyze-image-file", latest);
-          setChatMessages((msgs) => [...msgs, { role: "gemini", text: response.text }]);
-        }
-      } catch (err) {
-        setChatMessages((msgs) => [...msgs, { role: "gemini", text: "Error: " + String(err) }]);
-      } finally {
-        setChatLoading(false);
-      }
-    });
-    return () => {
-      unsubscribe && unsubscribe();
-    };
-  }, [refetch]);
 
   const handleTooltipVisibilityChange = (visible: boolean, height: number) => {
     setIsTooltipVisible(visible)
@@ -203,13 +173,11 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
     setIsSettingsOpen(!isSettingsOpen)
   }
 
-  const handleModelChange = (provider: "ollama" | "gemini", model: string) => {
-    setCurrentModel({ provider, model })
-    // Update chat messages to reflect the model change
-    const modelName = provider === "ollama" ? model : "Gemini 3 Pro"
-    setChatMessages((msgs) => [...msgs, { 
-      role: "gemini", 
-      text: `🔄 Switched to ${provider === "ollama" ? "🏠" : "☁️"} ${modelName}. Ready for your questions!` 
+  const handleModelChange = (model: string) => {
+    setCurrentModel({ provider: "ollama", model })
+    setChatMessages((msgs) => [...msgs, {
+      role: "assistant",
+      text: `Switched to ${model}. Ready for your questions!`
     }])
   }
 

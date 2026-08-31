@@ -27,7 +27,14 @@ export class ShortcutsHelper {
             preview
           })
         } catch (error) {
-          console.error("Error capturing screenshot:", error)
+          // Previously console-only: Cmd+H silently did nothing and the user
+          // had no way to learn why.
+          const reason = error instanceof Error ? error.message : String(error)
+          console.error("Error capturing screenshot:", reason)
+          mainWindow.webContents.send(
+            this.appState.PROCESSING_EVENTS.INITIAL_SOLUTION_ERROR,
+            reason
+          )
         }
       }
     })
