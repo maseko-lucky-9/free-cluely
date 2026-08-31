@@ -24,12 +24,16 @@ cd free-cluely
 
 2. Install dependencies:
 ```bash
-# If you encounter Sharp/Python build errors, use this:
-SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm install --ignore-scripts
-npm rebuild sharp
-
-# Or for normal installation:
 npm install
+```
+
+npm 11 blocks package install scripts by default. Electron's postinstall
+downloads its binary, so it is pre-approved in package.json under
+"allowScripts". If the app ever fails to start with *"Electron failed to
+install correctly"*, that approval has gone stale — re-run:
+```bash
+npm install-scripts approve electron
+npm rebuild electron
 ```
 
 3. Set up environment variables:
@@ -97,25 +101,21 @@ names one explicitly.
 
 ### Common Solutions
 
-#### Sharp/Python Build Errors
-If you see `gyp ERR! find Python` or Sharp build errors:
+#### "Electron failed to install correctly"
+npm 11 blocked electron's postinstall, so its binary was never downloaded:
 ```bash
-# Solution 1: Use prebuilt binaries
-rm -rf node_modules package-lock.json
-SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm install --ignore-scripts
-npm rebuild sharp
-
-# Solution 2: Or install Python (if you prefer building from source)
-brew install python3  # macOS
-# Then run: npm install
+npm install-scripts approve electron
+npm rebuild electron
 ```
 
 #### General Installation Issues
 If you see other errors:
 1. Delete the `node_modules` folder
-2. Delete `package-lock.json` 
-3. Run `npm install` again
-4. Try running with `npm start`
+2. Run `npm ci` (installs exactly what the lockfile pins)
+3. Try running with `npm start`
+
+This project uses **npm**. Do not run `pnpm install` — a second lockfile would
+resolve different versions from the same package.json.
 
 ### Platform-Specific Notes
 - **Windows**: App now works on Windows 10/11

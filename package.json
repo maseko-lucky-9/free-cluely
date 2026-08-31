@@ -2,12 +2,12 @@
   "name": "interview-coder",
   "version": "1.0.0",
   "main": "./dist-electron/main.js",
+  "packageManager": "npm@11.19.0",
   "scripts": {
     "clean": "rimraf dist dist-electron",
     "dev": "vite",
     "build": "npm run clean && tsc && vite build && tsc -p electron/tsconfig.json",
     "preview": "vite preview",
-    "postinstall": "cross-env SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm rebuild sharp",
     "electron:dev": "tsc -p electron/tsconfig.json && cross-env NODE_ENV=development electron .",
     "electron:build": "tsc -p electron/tsconfig.json && cross-env NODE_ENV=production electron .",
     "app:dev": "concurrently \"npm run dev -- --port 5180\" \"wait-on http://localhost:5180 && npm run electron:dev\"",
@@ -151,13 +151,11 @@
     "react-query": "^3.39.3",
     "react-syntax-highlighter": "^15.6.1",
     "screenshot-desktop": "^1.15.0",
-    "sharp": "^0.33.5",
     "tailwind-merge": "^2.5.4",
     "tesseract.js": "^5.0.5",
     "uuid": "^11.0.3"
   },
   "allowScripts": {
-    "file:.pnpm/electron@40.10.6/node_modules/electron": true,
-    "file:../../electron@40.10.6/node_modules/electron": true
+    "electron@40.8.0": true
   }
 }
