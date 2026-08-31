@@ -11,7 +11,10 @@
     "baseUrl": ".",
     "outDir": "../dist-electron",
     "moduleResolution": "node",
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "strict": true
   },
-  "include": ["*.ts"]
+  "include": [
+    "*.ts"
+  ]
 }

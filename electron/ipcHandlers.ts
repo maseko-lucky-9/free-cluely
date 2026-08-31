@@ -119,12 +119,12 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   })
 
-  ipcMain.handle("gemini-chat", async (event, message: string) => {
+  ipcMain.handle("llm-chat", async (event, message: string) => {
     try {
-      const result = await appState.processingHelper.getLLMHelper().chatWithGemini(message);
+      const result = await appState.processingHelper.getLLMHelper().chat(message);
       return result;
     } catch (error: any) {
-      console.error("Error in gemini-chat handler:", error);
+      console.error("Error in llm-chat handler:", error);
       throw error;
     }
   });
@@ -172,7 +172,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   ipcMain.handle("get-available-ollama-models", async () => {
     try {
       const llmHelper = appState.processingHelper.getLLMHelper();
-      const models = await llmHelper.getOllamaModels();
+      const models = await llmHelper.getVisionModels();
       return models;
     } catch (error: any) {
       console.error("Error getting Ollama models:", error);
@@ -191,16 +191,6 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  ipcMain.handle("switch-to-gemini", async (_, apiKey?: string) => {
-    try {
-      const llmHelper = appState.processingHelper.getLLMHelper();
-      await llmHelper.switchToGemini(apiKey);
-      return { success: true };
-    } catch (error: any) {
-      console.error("Error switching to Gemini:", error);
-      return { success: false, error: error.message };
-    }
-  });
 
   ipcMain.handle("test-llm-connection", async () => {
     try {

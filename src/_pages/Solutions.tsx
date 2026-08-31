@@ -23,7 +23,7 @@ import Debug from "./Debug"
  * Simple heuristic language detection for syntax highlighting.
  * Avoids hardcoding "python" for all code output.
  */
-function detectLanguage(code: string): string {
+export function detectLanguage(code: string): string {
   const trimmed = code.trim()
   if (/^(import|from)\s+\w/.test(trimmed) && /def\s+\w+\s*\(/.test(trimmed)) return "python"
   if (/^#include\s+[<"]/.test(trimmed) || /\bstd::\b/.test(trimmed)) return "cpp"
