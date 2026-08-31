@@ -5,6 +5,7 @@ import fs from "node:fs"
 import { app } from "electron"
 import { v4 as uuidv4 } from "uuid"
 import screenshot from "screenshot-desktop"
+import { describeScreenshotFailure } from "./screenshotErrors"
 
 export class ScreenshotHelper {
   private screenshotQueue: string[] = []
@@ -120,8 +121,9 @@ export class ScreenshotHelper {
 
       return screenshotPath
     } catch (error) {
-      console.error("Error taking screenshot:", error)
-      throw new Error(`Failed to take screenshot: ${error instanceof Error ? error.message : String(error)}`)
+      const raw = error instanceof Error ? error.message : String(error)
+      console.error("Error taking screenshot:", raw)
+      throw new Error(describeScreenshotFailure(raw))
     } finally {
       // Ensure window is always shown again
       showMainWindow()

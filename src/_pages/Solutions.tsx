@@ -290,7 +290,7 @@ const Solutions: React.FC<SolutionsProps> = ({ setView }) => {
       window.electronAPI.onSolutionError((error: string) => {
         showToast(
           "Processing Failed",
-          "There was an error processing your extra screenshots.",
+          error,
           "error"
         )
         // Reset solutions in the cache (even though this shouldn't ever happen) and complexities to previous states

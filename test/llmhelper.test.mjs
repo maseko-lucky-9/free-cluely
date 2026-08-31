@@ -305,6 +305,29 @@ await check("unreachable Ollama gives an actionable error", async () => {
   assert.match(error.message, /cannot reach ollama/i);
 });
 
+
+// --- screenshot failure messages -------------------------------------------
+
+const { describeScreenshotFailure } = require("../dist-electron/screenshotErrors.js");
+
+await check("the real macOS permission failure becomes an actionable message", () => {
+  // Verbatim from the failing run: screencapture reports this when Screen
+  // Recording is denied, which on its own tells the user nothing.
+  const raw =
+    'Command failed: screencapture -x -t jpg "/Users/x/screenshots/a.png"\ncould not create image from display\n';
+  const out = describeScreenshotFailure(raw);
+  assert.match(out, /Screen Recording/i, "must name the permission");
+  assert.match(out, /System Settings/i, "must say where to grant it");
+  assert.match(out, /restart/i, "must say a restart is required");
+  assert.ok(!/could not create image from display/.test(out), "must not leak the opaque message");
+});
+
+await check("an unrelated capture failure is passed through, not mislabelled", () => {
+  const out = describeScreenshotFailure("ENOSPC: no space left on device");
+  assert.match(out, /ENOSPC/);
+  assert.ok(!/Screen Recording/i.test(out), "must not blame permissions for a disk error");
+});
+
 // --- report -----------------------------------------------------------------
 
 server.close();

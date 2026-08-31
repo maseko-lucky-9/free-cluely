@@ -140,11 +140,7 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
       window.electronAPI.onScreenshotTaken(() => refetch()),
       window.electronAPI.onResetView(() => refetch()),
       window.electronAPI.onSolutionError((error: string) => {
-        showToast(
-          "Processing Failed",
-          "There was an error processing your screenshots.",
-          "error"
-        )
+        showToast("Processing Failed", error, "error")
         setView("queue")
         console.error("Processing error:", error)
       }),
