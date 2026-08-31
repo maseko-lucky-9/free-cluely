@@ -4,6 +4,7 @@ import { WindowHelper } from "./WindowHelper"
 import { ScreenshotHelper } from "./ScreenshotHelper"
 import { ShortcutsHelper } from "./shortcuts"
 import { ProcessingHelper } from "./ProcessingHelper"
+import { APP_NAME } from "./screenshotErrors"
 
 export class AppState {
   private static instance: AppState | null = null
@@ -268,6 +269,11 @@ export class AppState {
 }
 
 // Application initialization
+// Name the running process. Note this does NOT rename the macOS Screen
+// Recording entry - that comes from the bundle - but it does fix the menu bar,
+// notifications, and anything reading app.getName().
+app.setName(APP_NAME)
+
 async function initializeApp() {
   const appState = AppState.getInstance()
 

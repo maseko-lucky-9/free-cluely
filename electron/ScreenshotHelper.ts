@@ -123,7 +123,13 @@ export class ScreenshotHelper {
     } catch (error) {
       const raw = error instanceof Error ? error.message : String(error)
       console.error("Error taking screenshot:", raw)
-      throw new Error(describeScreenshotFailure(raw))
+      throw new Error(
+        describeScreenshotFailure(raw, {
+          appName: app.getName(),
+          exePath: app.getPath("exe"),
+          isPackaged: app.isPackaged
+        })
+      )
     } finally {
       // Ensure window is always shown again
       showMainWindow()

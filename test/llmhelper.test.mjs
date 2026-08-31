@@ -310,20 +310,37 @@ await check("unreachable Ollama gives an actionable error", async () => {
 
 const { describeScreenshotFailure } = require("../dist-electron/screenshotErrors.js");
 
-await check("the real macOS permission failure becomes an actionable message", () => {
-  // Verbatim from the failing run: screencapture reports this when Screen
-  // Recording is denied, which on its own tells the user nothing.
+await check("dev-mode permission failure names the Electron entry, not the product", () => {
+  // Verbatim from the failing run.
   const raw =
     'Command failed: screencapture -x -t jpg "/Users/x/screenshots/a.png"\ncould not create image from display\n';
-  const out = describeScreenshotFailure(raw);
+  const out = describeScreenshotFailure(raw, {
+    appName: "Meeting Notes Coder",
+    exePath: "/repo/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",
+    isPackaged: false,
+    platform: "darwin",
+  });
   assert.match(out, /Screen Recording/i, "must name the permission");
   assert.match(out, /System Settings/i, "must say where to grant it");
-  assert.match(out, /restart/i, "must say a restart is required");
+  // The whole point: in dev the entry is "Electron", NOT the product name.
+  assert.match(out, /"Electron"/, "must name the entry the user will actually see");
+  assert.match(out, /NOT "Meeting Notes Coder"/, "must warn the product name is absent");
+  assert.match(out, /Electron\.app\/Contents\/MacOS\/Electron/, "must give the binary path");
   assert.ok(!/could not create image from display/.test(out), "must not leak the opaque message");
 });
 
+await check("packaged permission failure names the product itself", () => {
+  const out = describeScreenshotFailure("could not create image from display", {
+    appName: "Meeting Notes Coder",
+    isPackaged: true,
+    platform: "darwin",
+  });
+  assert.match(out, /enable "Meeting Notes Coder"/, "packaged app has its own entry");
+  assert.ok(!/"Electron"/.test(out), "must not send a packaged user hunting for Electron");
+});
+
 await check("an unrelated capture failure is passed through, not mislabelled", () => {
-  const out = describeScreenshotFailure("ENOSPC: no space left on device");
+  const out = describeScreenshotFailure("ENOSPC: no space left on device", { platform: "darwin" });
   assert.match(out, /ENOSPC/);
   assert.ok(!/Screen Recording/i.test(out), "must not blame permissions for a disk error");
 });
