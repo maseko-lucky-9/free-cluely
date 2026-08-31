@@ -308,35 +308,38 @@ await check("unreachable Ollama gives an actionable error", async () => {
 
 // --- screenshot failure messages -------------------------------------------
 
-const { describeScreenshotFailure } = require("../dist-electron/screenshotErrors.js");
+const { describeScreenshotFailure, describeScreenCapturePermission } = require("../dist-electron/screenshotErrors.js");
 
-await check("dev-mode permission failure names the Electron entry, not the product", () => {
-  // Verbatim from the failing run.
-  const raw =
-    'Command failed: screencapture -x -t jpg "/Users/x/screenshots/a.png"\ncould not create image from display\n';
-  const out = describeScreenshotFailure(raw, {
+await check("a DENIED dev build is told to reset TCC, not to hunt for a missing toggle", () => {
+  // Probed on this machine: getMediaAccessStatus("screen") === "denied" while no
+  // entry exists in the settings pane, because ad-hoc signing orphans the record.
+  const out = describeScreenCapturePermission("denied", {
     appName: "Meeting Notes Coder",
     exePath: "/repo/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",
     isPackaged: false,
-    platform: "darwin",
   });
-  assert.match(out, /Screen Recording/i, "must name the permission");
-  assert.match(out, /System Settings/i, "must say where to grant it");
-  // The whole point: in dev the entry is "Electron", NOT the product name.
-  assert.match(out, /"Electron"/, "must name the entry the user will actually see");
-  assert.match(out, /NOT "Meeting Notes Coder"/, "must warn the product name is absent");
+  assert.match(out, /tccutil reset ScreenCapture com\.github\.Electron/, "must give the reset command");
+  assert.match(out, /never re-asks|not ask again|never/i, "must explain why no prompt appears");
+  assert.match(out, /missing from|nothing there/i, "must warn the entry may not exist at all");
   assert.match(out, /Electron\.app\/Contents\/MacOS\/Electron/, "must give the binary path");
-  assert.ok(!/could not create image from display/.test(out), "must not leak the opaque message");
 });
 
-await check("packaged permission failure names the product itself", () => {
-  const out = describeScreenshotFailure("could not create image from display", {
+await check("a DENIED packaged build is sent straight to the settings pane", () => {
+  const out = describeScreenCapturePermission("denied", {
     appName: "Meeting Notes Coder",
     isPackaged: true,
-    platform: "darwin",
   });
-  assert.match(out, /enable "Meeting Notes Coder"/, "packaged app has its own entry");
+  assert.match(out, /enable it manually/i);
+  assert.ok(!/tccutil/.test(out), "packaged builds have a real entry; no reset needed");
   assert.ok(!/"Electron"/.test(out), "must not send a packaged user hunting for Electron");
+});
+
+
+await check("the raw CLI error still routes into the permission explanation", () => {
+  const raw = 'Command failed: screencapture -x -t jpg "/tmp/a.png"\ncould not create image from display\n';
+  const out = describeScreenshotFailure(raw, { isPackaged: false, platform: "darwin" });
+  assert.match(out, /tccutil reset ScreenCapture/, "raw CLI failure must reach the same guidance");
+  assert.ok(!/could not create image from display/.test(out), "must not leak the opaque message");
 });
 
 await check("an unrelated capture failure is passed through, not mislabelled", () => {

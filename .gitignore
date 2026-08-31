@@ -142,3 +142,5 @@ dist
 
 
 screenshots
+# electron-builder output - hundreds of MB, exceeds GitHub's file size limit
+release/

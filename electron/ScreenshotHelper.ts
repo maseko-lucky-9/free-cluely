@@ -2,10 +2,14 @@
 
 import path from "node:path"
 import fs from "node:fs"
-import { app } from "electron"
+import { app, systemPreferences, desktopCapturer } from "electron"
 import { v4 as uuidv4 } from "uuid"
 import screenshot from "screenshot-desktop"
-import { describeScreenshotFailure } from "./screenshotErrors"
+import {
+  describeScreenshotFailure,
+  describeScreenCapturePermission,
+  MediaAccessStatus
+} from "./screenshotErrors"
 
 export class ScreenshotHelper {
   private screenshotQueue: string[] = []
@@ -83,6 +87,7 @@ export class ScreenshotHelper {
       hideMainWindow()
       
       // Add a small delay to ensure window is hidden
+      await this.ensureScreenCapturePermission()
       await new Promise(resolve => setTimeout(resolve, 100))
       
       let screenshotPath = ""
@@ -133,6 +138,44 @@ export class ScreenshotHelper {
     } finally {
       // Ensure window is always shown again
       showMainWindow()
+    }
+  }
+
+
+  /**
+   * Fails fast with an actionable message instead of shelling out to
+   * `screencapture` and surfacing "could not create image from display".
+   *
+   * When the status is not-determined we call desktopCapturer once: that is the
+   * API that actually registers the app with TCC and raises the OS prompt.
+   * Spawning the screencapture CLI does not reliably do so, which is why no
+   * entry appears in the settings pane for an unpackaged build.
+   */
+  private async ensureScreenCapturePermission(): Promise<void> {
+    if (process.platform !== "darwin") return
+
+    const context = {
+      appName: app.getName(),
+      exePath: app.getPath("exe"),
+      isPackaged: app.isPackaged
+    }
+
+    let status = systemPreferences.getMediaAccessStatus("screen") as MediaAccessStatus
+
+    if (status === "not-determined") {
+      try {
+        await desktopCapturer.getSources({
+          types: ["screen"],
+          thumbnailSize: { width: 1, height: 1 }
+        })
+      } catch {
+        // The prompt itself is what matters; a failure here is not fatal.
+      }
+      status = systemPreferences.getMediaAccessStatus("screen") as MediaAccessStatus
+    }
+
+    if (status !== "granted") {
+      throw new Error(describeScreenCapturePermission(status, context))
     }
   }
 
