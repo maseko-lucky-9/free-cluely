@@ -43,6 +43,18 @@ export function isLaunchedFromShell(ppid: number): boolean {
   return ppid !== 1
 }
 
+/**
+ * screenshot-desktop sanitises the output path with
+ *   filename.replace(/[^a-zA-Z0-9._\-/]/g, "")
+ * so ANY space is silently deleted and the capture is redirected to a directory
+ * that does not exist - while still resolving successfully. macOS userData lives
+ * under "Application Support", which always contains a space, so the destination
+ * can never be passed to it directly.
+ */
+export function survivesCaptureSanitizer(filePath: string): boolean {
+  return filePath === filePath.replace(/[^a-zA-Z0-9._\-/]/g, "")
+}
+
 const PERMISSION_DENIED =
   /could not create image from display|not authorized|screen recording|kCGErrorFailure/i
 

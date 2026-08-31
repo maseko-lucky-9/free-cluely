@@ -308,7 +308,24 @@ await check("unreachable Ollama gives an actionable error", async () => {
 
 // --- screenshot failure messages -------------------------------------------
 
-const { describeScreenshotFailure, describeScreenCapturePermission, isLaunchedFromShell } = require("../dist-electron/screenshotErrors.js");
+const { describeScreenshotFailure, describeScreenCapturePermission, isLaunchedFromShell, survivesCaptureSanitizer } = require("../dist-electron/screenshotErrors.js");
+
+await check("detects paths the capture tool would silently corrupt", () => {
+  // Real observed failure: the capture tool strips spaces, redirecting the write
+  // to a nonexistent dir while still reporting success.
+  const real = "/Users/x/Library/Application Support/Meeting Notes Coder/screenshots/a.png";
+  assert.equal(survivesCaptureSanitizer(real), false, "spaces must be detected as unsafe");
+  assert.equal(
+    survivesCaptureSanitizer("/var/folders/p2/abc123/T/11111111-2222-3333.png"),
+    true,
+    "a temp path of safe characters must pass"
+  );
+  // Exactly how the corruption manifests, for the record.
+  assert.equal(
+    real.replace(/[^a-zA-Z0-9._\-/]/g, ""),
+    "/Users/x/Library/ApplicationSupport/MeetingNotesCoder/screenshots/a.png"
+  );
+});
 
 await check("launch attribution is decided by ppid", () => {
   // Finder/Dock/open reparent to launchd; anything else came from a shell.

@@ -1,6 +1,7 @@
 // ScreenshotHelper.ts
 
 import path from "node:path"
+import os from "node:os"
 import fs from "node:fs"
 import { app, systemPreferences, desktopCapturer } from "electron"
 import { v4 as uuidv4 } from "uuid"
@@ -9,6 +10,7 @@ import {
   describeScreenshotFailure,
   describeScreenCapturePermission,
   isLaunchedFromShell,
+  survivesCaptureSanitizer,
   MediaAccessStatus
 } from "./screenshotErrors"
 
@@ -80,6 +82,44 @@ export class ScreenshotHelper {
     this.extraScreenshotQueue = []
   }
 
+  /**
+   * Captures to a sanitiser-safe staging path, verifies an image was actually
+   * produced, then moves it to the destination.
+   *
+   * Two defects are handled here. screenshot-desktop strips spaces from the
+   * output path (see survivesCaptureSanitizer), and when a filename is supplied
+   * it resolves WITHOUT checking that the file was written - so a failed capture
+   * looked identical to a successful one.
+   */
+  private async captureTo(destPath: string): Promise<void> {
+    const staging = path.join(os.tmpdir(), `${uuidv4()}.png`)
+    if (!survivesCaptureSanitizer(staging)) {
+      throw new Error(
+        `Cannot capture: the temporary path contains characters the capture tool strips (${staging}).`
+      )
+    }
+
+    this.logPermission(`capture start staging=${staging} dest=${destPath}`)
+    await screenshot({ filename: staging })
+
+    const wrote = fs.existsSync(staging) ? fs.statSync(staging).size : 0
+    this.logPermission(`capture staged bytes=${wrote}`)
+    if (wrote === 0) {
+      throw new Error(
+        "Screen capture produced no image. The capture tool reported success but wrote nothing."
+      )
+    }
+
+    try {
+      await fs.promises.rename(staging, destPath)
+    } catch {
+      // rename fails across volumes; fall back to copy + remove.
+      await fs.promises.copyFile(staging, destPath)
+      await fs.promises.unlink(staging).catch(() => {})
+    }
+    this.logPermission(`capture done bytes=${fs.statSync(destPath).size} path=${destPath}`)
+  }
+
   public async takeScreenshot(
     hideMainWindow: () => void,
     showMainWindow: () => void
@@ -95,7 +135,7 @@ export class ScreenshotHelper {
 
       if (this.view === "queue") {
         screenshotPath = path.join(this.screenshotDir, `${uuidv4()}.png`)
-        await screenshot({ filename: screenshotPath })
+        await this.captureTo(screenshotPath)
 
         this.screenshotQueue.push(screenshotPath)
         if (this.screenshotQueue.length > this.MAX_SCREENSHOTS) {
@@ -110,7 +150,7 @@ export class ScreenshotHelper {
         }
       } else {
         screenshotPath = path.join(this.extraScreenshotDir, `${uuidv4()}.png`)
-        await screenshot({ filename: screenshotPath })
+        await this.captureTo(screenshotPath)
 
         this.extraScreenshotQueue.push(screenshotPath)
         if (this.extraScreenshotQueue.length > this.MAX_SCREENSHOTS) {
@@ -129,6 +169,7 @@ export class ScreenshotHelper {
     } catch (error) {
       const raw = error instanceof Error ? error.message : String(error)
       console.error("Error taking screenshot:", raw)
+      this.logPermission(`capture FAILED raw=${raw.replace(/\s+/g, " ").slice(0, 500)}`)
       throw new Error(
         describeScreenshotFailure(raw, {
           appName: app.getName(),
