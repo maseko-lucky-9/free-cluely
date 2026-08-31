@@ -2,6 +2,7 @@
 
 import { AppState } from "./main"
 import { LLMHelper } from "./LLMHelper"
+import { loadLlmConfig } from "./llmConfig"
 import dotenv from "dotenv"
 
 dotenv.config()
@@ -16,8 +17,9 @@ export class ProcessingHelper {
     this.appState = appState
 
     // Local-only: Ollama is the sole provider. No API key, no cloud fallback.
-    const ollamaModel = process.env.OLLAMA_MODEL || undefined
-    const ollamaUrl = process.env.OLLAMA_URL || "http://localhost:11434"
+    const stored = loadLlmConfig()
+    const ollamaModel = stored.model || process.env.OLLAMA_MODEL || undefined
+    const ollamaUrl = stored.url || process.env.OLLAMA_URL || "http://localhost:11434"
 
     console.log("[ProcessingHelper] Initializing with Ollama")
     this.llmHelper = new LLMHelper(ollamaModel, ollamaUrl)

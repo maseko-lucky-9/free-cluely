@@ -3,6 +3,7 @@
 import { ipcMain, app } from "electron"
 import path from "node:path"
 import { AppState } from "./main"
+import { saveLlmConfig } from "./llmConfig"
 
 export function initializeIpcHandlers(appState: AppState): void {
   ipcMain.handle(
@@ -184,6 +185,8 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const llmHelper = appState.processingHelper.getLLMHelper();
       await llmHelper.switchToOllama(model, url);
+      // Only persisted once switchToOllama has validated the model.
+      saveLlmConfig({ model: llmHelper.getCurrentModel(), url: llmHelper.getOllamaUrl() });
       return { success: true };
     } catch (error: any) {
       console.error("Error switching to Ollama:", error);
