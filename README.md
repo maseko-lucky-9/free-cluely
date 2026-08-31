@@ -75,7 +75,7 @@ auto-selected.
 
 **Setup:**
 1. Install Ollama from [ollama.ai](https://ollama.ai)
-2. Pull a vision model: `ollama pull qwen2.5vl:7b`
+2. Pull a vision model: `ollama pull qwen3.5:9b`
 3. Start it: `ollama serve`
 
 The app auto-selects the first installed vision-capable model unless `OLLAMA_MODEL`
@@ -194,10 +194,15 @@ If you see other errors:
 ## Technical Details
 
 ### **AI Models Supported**
-Any Ollama model with the `vision` capability. Verified working on Apple Silicon:
-- **qwen2.5vl:7b** - 6 GB, fastest vision model tested
-- **gemma4:12b** - 7.6 GB, vision + reasoning
-- **qwen3.5:9b** - 6.6 GB, vision + reasoning
+Any Ollama model with the `vision` capability. Benchmarked on Apple M5 Pro / 24 GB
+over 70 sequential runs:
+
+| model | verdict |
+|---|---|
+| **qwen3.5:9b** | **Recommended.** 31/31 valid JSON, 20/20 executed-correct on easy problems, 6.0 GB fully GPU-resident, ~6.6s extract / ~8.8s solve. Fails visibly. |
+| qwen2.5vl:7b | Fastest, but on hard problems returns schema-valid JSON whose `code` is just `using System;` - a silent wrong answer. |
+| gemma4:12b / gemma4:latest | Downsample images so aggressively they hallucinate examples that aren't on screen. Disqualified. |
+| qwen3.6:27b | 117s per response, 18 GB with CPU spill. Disqualified. |
 
 Text-only models are rejected at startup with a clear message.
 

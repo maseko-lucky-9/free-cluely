@@ -9,6 +9,7 @@ interface OllamaGenerateResponse {
    */
   thinking?: string;
   done?: boolean;
+  done_reason?: string;
   error?: string;
 }
 
@@ -19,7 +20,6 @@ interface OllamaModelInfo {
 
 const EMBEDDING_CAPABILITY = "embedding";
 const VISION_CAPABILITY = "vision";
-const THINKING_CAPABILITY = "thinking";
 
 export class LLMHelper {
   private ollamaModel: string = "";
@@ -41,7 +41,7 @@ export class LLMHelper {
 
     // A full-resolution screenshot costs a lot of image tokens. Ollama's default
     // context (~2048) silently truncates it, so the model answers on a fragment.
-    this.numCtx = Number(process.env.OLLAMA_NUM_CTX) || 8192;
+    this.numCtx = Number(process.env.OLLAMA_NUM_CTX) || 16384;
     this.numPredict = Number(process.env.OLLAMA_NUM_PREDICT) || 2048;
     this.timeoutMs = Number(process.env.OLLAMA_TIMEOUT_MS) || 180_000;
     this.keepAlive = process.env.OLLAMA_KEEP_ALIVE || "10m";
@@ -230,15 +230,17 @@ export class LLMHelper {
     if (images?.length) body.images = images;
     if (opts?.schema) body.format = opts.schema;
 
-    // Only send `think` to models advertising the capability — others reject it.
-    if (this.currentModelInfo()?.capabilities.includes(THINKING_CAPABILITY)) {
-      // ponytail: gpt-oss rejects booleans and needs a level string.
-      body.think = this.ollamaModel.includes("gpt-oss")
-        ? process.env.OLLAMA_THINK_LEVEL || "low"
-        : false;
-    }
+    // `think` is load-bearing, NOT an optimisation. Measured on Ollama 0.33.2:
+    // with `format` set and `think` absent, a thinking model spends its entire
+    // budget in the `thinking` field and returns response:"" — which then fails
+    // to parse. Sending think:false also cut real extraction from 21.9s to 6.7s.
+    // Models without thinking support accept think:false silently; the retry
+    // below covers any that do not.
+    body.think = this.ollamaModel.includes("gpt-oss")
+      ? process.env.OLLAMA_THINK_LEVEL || "low"
+      : false;
 
-    return this.withRetry(async () => {
+    const attempt = async (): Promise<string> => {
       const timeout = AbortSignal.timeout(this.timeoutMs);
       const signal = opts?.signal ? AbortSignal.any([timeout, opts.signal]) : timeout;
 
@@ -265,11 +267,23 @@ export class LLMHelper {
 
       if (!res.ok) {
         const detail = await res.text().catch(() => "");
+        if (res.status === 400 && /think/i.test(detail) && "think" in body) {
+          delete body.think;
+          console.warn(`[LLMHelper] ${this.ollamaModel} rejected the think field; retrying without it.`);
+          return attempt();
+        }
         throw new Error(`Ollama API error ${res.status}: ${detail.slice(0, 400)}`);
       }
 
       const data: OllamaGenerateResponse = await res.json();
       if (data.error) throw new Error(`Ollama error: ${data.error}`);
+
+      if (data.done_reason === "length") {
+        throw new Error(
+          `${this.ollamaModel} hit the output limit before finishing (num_predict=${this.numPredict}). ` +
+            "The answer would be truncated — try a stronger model or raise OLLAMA_NUM_PREDICT.",
+        );
+      }
 
       const text = data.response ?? "";
       if (!text.trim()) {
@@ -280,7 +294,9 @@ export class LLMHelper {
         );
       }
       return text;
-    });
+    };
+
+    return this.withRetry(attempt);
   }
 
   // ---------------------------------------------------------------------------

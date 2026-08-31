@@ -97,11 +97,11 @@ const server = http.createServer((req, res) => {
 
     if (current.status !== 200) {
       res.writeHead(current.status, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "scripted failure" }));
+      res.end(current.body ?? JSON.stringify({ error: "scripted failure" }));
       return;
     }
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ response: current.body, done: true }));
+    res.end(JSON.stringify({ response: current.body, done: true, done_reason: current.doneReason ?? "stop" }));
   });
 });
 
@@ -179,27 +179,50 @@ await check("request body carries schema, num_ctx, keep_alive, temperature 0", a
     assert.ok(body.format, `call ${i + 1}: missing format (JSON schema)`);
     assert.equal(typeof body.format, "object", `call ${i + 1}: format must be a schema, not "json"`);
     assert.equal(body.options.temperature, 0, `call ${i + 1}: temperature must be 0 for structured output`);
-    assert.ok(body.options.num_ctx >= 4096, `call ${i + 1}: num_ctx too small (${body.options.num_ctx})`);
+    assert.ok(body.options.num_ctx >= 8192, `call ${i + 1}: num_ctx too small (${body.options.num_ctx})`);
     assert.ok(body.options.num_predict > 0, `call ${i + 1}: missing num_predict`);
     assert.ok(body.keep_alive, `call ${i + 1}: missing keep_alive`);
     assert.equal(body.stream, false, `call ${i + 1}: stream must be false`);
+    assert.equal(body.think, false, `call ${i + 1}: think:false is mandatory alongside format`);
     assert.ok(Array.isArray(body.images) && body.images.length === 1,
       `call ${i + 1}: the image must be sent to BOTH stages`);
     assert.ok(!EMBEDDING_MODELS.includes(body.model), `call ${i + 1}: embedding model on the wire`);
   }
 });
 
-await check("sends `think` only to models that advertise the capability", async () => {
-  const nonThinking = freshHelper("qwen2.5vl:7b");
-  script = { status: 200, body: GOOD_SOLUTION };
-  await nonThinking.chat("hi");
-  assert.ok(!("think" in requests[0]), "qwen2.5vl:7b has no thinking capability; think must be omitted");
+await check("always sends think:false — omitting it with format returns an empty response", async () => {
+  // Measured on Ollama 0.33.2: format set + think absent => response:"" because the
+  // model spends its whole budget in the `thinking` field. This is not tuning.
+  for (const model of ["qwen2.5vl:7b", "gemma4:12b"]) {
+    requests.length = 0;
+    const helper = freshHelper(model);
+    script = { status: 200, body: GOOD_SOLUTION };
+    await helper.chat("hi");
+    assert.equal(requests[0].think, false, `${model}: think:false must always be sent`);
+  }
+});
 
-  requests.length = 0;
-  const thinking = freshHelper("gemma4:12b");
-  await thinking.chat("hi");
-  assert.ok("think" in requests[0], "gemma4:12b advertises thinking; think must be sent");
-  assert.notEqual(requests[0].think, true, "bare `true` is rejected by some models");
+await check("falls back gracefully if a model rejects the think field", async () => {
+  const helper = freshHelper();
+  let seen = 0;
+  script = () => {
+    seen++;
+    return seen === 1
+      ? { status: 400, body: '{"error":"model does not support thinking"}' }
+      : { status: 200, body: GOOD_SOLUTION };
+  };
+  const out = await helper.chat("hi");
+  assert.equal(requests.length, 2, "should retry once without think");
+  assert.equal(requests[0].think, false);
+  assert.ok(!("think" in requests[1]), "retry must drop the think field");
+  assert.ok(out.includes("find_it"));
+});
+
+await check("truncated generation THROWS instead of returning a partial answer", async () => {
+  const helper = freshHelper();
+  script = { status: 200, body: '{"solution":{"code":"def f(', doneReason: "length" };
+  const error = await rejects(() => helper.chat("hi"));
+  assert.match(error.message, /output limit/i);
 });
 
 await check("garbage prose THROWS instead of being rendered as an answer", async () => {
