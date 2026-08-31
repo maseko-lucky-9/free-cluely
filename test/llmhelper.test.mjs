@@ -308,24 +308,86 @@ await check("unreachable Ollama gives an actionable error", async () => {
 
 // --- screenshot failure messages -------------------------------------------
 
-const { describeScreenshotFailure } = require("../dist-electron/screenshotErrors.js");
+const { describeScreenshotFailure, describeScreenCapturePermission, isLaunchedFromShell, survivesCaptureSanitizer } = require("../dist-electron/screenshotErrors.js");
 
-await check("the real macOS permission failure becomes an actionable message", () => {
-  // Verbatim from the failing run: screencapture reports this when Screen
-  // Recording is denied, which on its own tells the user nothing.
-  const raw =
-    'Command failed: screencapture -x -t jpg "/Users/x/screenshots/a.png"\ncould not create image from display\n';
-  const out = describeScreenshotFailure(raw);
-  assert.match(out, /Screen Recording/i, "must name the permission");
-  assert.match(out, /System Settings/i, "must say where to grant it");
-  assert.match(out, /restart/i, "must say a restart is required");
+await check("detects paths the capture tool would silently corrupt", () => {
+  // Real observed failure: the capture tool strips spaces, redirecting the write
+  // to a nonexistent dir while still reporting success.
+  const real = "/Users/x/Library/Application Support/Meeting Notes Coder/screenshots/a.png";
+  assert.equal(survivesCaptureSanitizer(real), false, "spaces must be detected as unsafe");
+  assert.equal(
+    survivesCaptureSanitizer("/var/folders/p2/abc123/T/11111111-2222-3333.png"),
+    true,
+    "a temp path of safe characters must pass"
+  );
+  // Exactly how the corruption manifests, for the record.
+  assert.equal(
+    real.replace(/[^a-zA-Z0-9._\-/]/g, ""),
+    "/Users/x/Library/ApplicationSupport/MeetingNotesCoder/screenshots/a.png"
+  );
+});
+
+await check("launch attribution is decided by ppid", () => {
+  // Finder/Dock/open reparent to launchd; anything else came from a shell.
+  assert.equal(isLaunchedFromShell(1), false, "ppid 1 = launchd = self-attributed");
+  assert.equal(isLaunchedFromShell(90558), true, "a real shell pid means shell-attributed");
+  assert.equal(isLaunchedFromShell(0), true, "unknown parent must not be treated as Finder");
+});
+
+await check("a shell-launched run says permission is attributed elsewhere", () => {
+  // Verified on this machine: shell ancestry was zsh -> claude-code -> Claude.app,
+  // so TCC consults Claude's entry, not the app's. Toggling the app does nothing.
+  const out = describeScreenCapturePermission("denied", {
+    appName: "Meeting Notes Coder",
+    exePath: "/Applications/Meeting Notes Coder.app/Contents/MacOS/Meeting Notes Coder",
+    isPackaged: true,
+    launchedFromShell: true,
+    responsibleHint: "Claude",
+  });
+  assert.match(out, /started from a shell/i, "must name the actual cause");
+  assert.match(out, /Claude/, "must name the responsible process when known");
+  assert.match(out, /will not help/i, "must say toggling this app's entry is useless here");
+  assert.match(out, /open -a "Meeting Notes Coder"/, "must give the corrective launch");
+  // The old advice was actively wrong; make sure it cannot come back.
+  assert.ok(!/tccutil/.test(out), "tccutil advice was based on contaminated probes");
+  assert.ok(!/com\.github\.Electron/.test(out), "dev bundle id is irrelevant under shell attribution");
+});
+
+await check("a Finder-launched denial points at the real macOS 26 pane", () => {
+  const out = describeScreenCapturePermission("denied", {
+    appName: "Meeting Notes Coder",
+    isPackaged: true,
+    launchedFromShell: false,
+  });
+  assert.match(out, /Screen & System Audio Recording/, "macOS 26 renamed the pane");
+  assert.match(out, /switch "Meeting Notes Coder" ON/i, "must name the entry to enable");
+  assert.match(out, /already ON.*OFF and\s+back ON/is, "must cover the stale-grant case");
+  assert.ok(!/started from a shell/i.test(out), "must not blame the shell when self-attributed");
+});
+
+await check("not-determined asks for approval rather than blaming a denial", () => {
+  const out = describeScreenCapturePermission("not-determined", {
+    appName: "Meeting Notes Coder",
+    isPackaged: true,
+    launchedFromShell: false,
+  });
+  assert.match(out, /has not been granted yet/i);
+  assert.ok(!/denied/i.test(out), "must not claim a denial that has not happened");
+});
+
+await check("the raw CLI error still routes into the permission explanation", () => {
+  const raw = 'Command failed: screencapture -x -t jpg "/tmp/a.png"\ncould not create image from display\n';
+  const out = describeScreenshotFailure(raw, { isPackaged: true, launchedFromShell: false, platform: "darwin" });
+  assert.match(out, /Screen & System Audio Recording/);
   assert.ok(!/could not create image from display/.test(out), "must not leak the opaque message");
 });
 
 await check("an unrelated capture failure is passed through, not mislabelled", () => {
-  const out = describeScreenshotFailure("ENOSPC: no space left on device");
+  const out = describeScreenshotFailure("ENOSPC: no space left on device", { platform: "darwin" });
   assert.match(out, /ENOSPC/);
-  assert.ok(!/Screen Recording/i.test(out), "must not blame permissions for a disk error");
+  assert.match(out, /^Failed to take screenshot:/, "must pass the raw error through");
+  assert.ok(!/Screen & System Audio Recording|permission/i.test(out),
+    "must not blame permissions for a disk error");
 });
 
 // --- report -----------------------------------------------------------------
