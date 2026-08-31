@@ -1,6 +1,7 @@
 // ipcHandlers.ts
 
 import { ipcMain, app } from "electron"
+import path from "node:path"
 import { AppState } from "./main"
 
 export function initializeIpcHandlers(appState: AppState): void {
@@ -13,8 +14,13 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   )
 
-  ipcMain.handle("delete-screenshot", async (event, path: string) => {
-    return appState.deleteScreenshot(path)
+  ipcMain.handle("delete-screenshot", async (event, filePath: string) => {
+    const resolved = path.resolve(filePath)
+    const allowedDir = path.resolve(app.getPath("userData"))
+    if (!resolved.startsWith(allowedDir)) {
+      return { success: false, error: "Path outside allowed directory" }
+    }
+    return appState.deleteScreenshot(filePath)
   })
 
   ipcMain.handle("take-screenshot", async () => {
@@ -82,9 +88,14 @@ export function initializeIpcHandlers(appState: AppState): void {
   })
 
   // IPC handler for analyzing audio from file path
-  ipcMain.handle("analyze-audio-file", async (event, path: string) => {
+  ipcMain.handle("analyze-audio-file", async (event, filePath: string) => {
     try {
-      const result = await appState.processingHelper.processAudioFile(path)
+      const resolved = path.resolve(filePath)
+      const allowedDir = path.resolve(app.getPath("userData"))
+      if (!resolved.startsWith(allowedDir)) {
+        throw new Error("Path outside allowed directory")
+      }
+      const result = await appState.processingHelper.processAudioFile(filePath)
       return result
     } catch (error: any) {
       console.error("Error in analyze-audio-file handler:", error)
@@ -93,9 +104,14 @@ export function initializeIpcHandlers(appState: AppState): void {
   })
 
   // IPC handler for analyzing image from file path
-  ipcMain.handle("analyze-image-file", async (event, path: string) => {
+  ipcMain.handle("analyze-image-file", async (event, filePath: string) => {
     try {
-      const result = await appState.processingHelper.getLLMHelper().analyzeImageFile(path)
+      const resolved = path.resolve(filePath)
+      const allowedDir = path.resolve(app.getPath("userData"))
+      if (!resolved.startsWith(allowedDir)) {
+        throw new Error("Path outside allowed directory")
+      }
+      const result = await appState.processingHelper.getLLMHelper().analyzeImageFile(filePath)
       return result
     } catch (error: any) {
       console.error("Error in analyze-image-file handler:", error)

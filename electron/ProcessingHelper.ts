@@ -101,7 +101,7 @@ export class ProcessingHelper {
               thoughts: result.solution.thoughts || [],
               time_complexity: result.solution.time_complexity || result.problemInfo.complexity?.time || "N/A",
               space_complexity: result.solution.space_complexity || result.problemInfo.complexity?.space || "N/A",
-              explanation: result.solution.explanation || ""
+              explanation: (result.solution as any).explanation || (result.solution as any).reasoning || ""
             }
           };
           console.log("[ProcessingHelper] Sending solution:", solutionPayload);

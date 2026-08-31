@@ -35,7 +35,7 @@ win.loadURL('file://' + __dirname + '/index.html');
 
 ### Backend Communication
 
-The overlay captures clipboard data, screenshots, or selected text and sends this information to an AI backend. This project uses **Google Gemini (`gemini-2.0-flash`)** for its fast multimodal capabilities (text + vision), with optional Ollama support for local/offline usage. The backend quickly processes and returns useful suggestions or solutions.
+The overlay captures clipboard data, screenshots, or selected text and sends this information to an AI backend. This project uses **Google Gemini (`gemini-2.5-flash`)** for its fast multimodal capabilities (text + vision), with optional Ollama support for local/offline usage. The backend quickly processes and returns useful suggestions or solutions.
 
 ### Screen Capture and OCR
 

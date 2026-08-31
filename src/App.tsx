@@ -3,7 +3,9 @@ import Queue from "./_pages/Queue"
 import { ToastViewport } from "@radix-ui/react-toast"
 import { useEffect, useRef, useState } from "react"
 import Solutions from "./_pages/Solutions"
+import Debug from "./_pages/Debug"
 import { QueryClient, QueryClientProvider } from "react-query"
+import ErrorBoundary from "./components/ErrorBoundary"
 
 declare global {
   interface Window {
@@ -39,9 +41,11 @@ declare global {
       onDebugStart: (callback: () => void) => () => void
       onDebugError: (callback: (error: string) => void) => () => void
 
-      // Audio Processing
+      // Audio & Image Processing
       analyzeAudioFromBase64: (data: string, mimeType: string) => Promise<{ text: string; timestamp: number }>
       analyzeAudioFile: (path: string) => Promise<{ text: string; timestamp: number }>
+      analyzeImageFile: (path: string) => Promise<{ text: string; timestamp: number }>
+      geminiChat: (message: string) => Promise<string>
 
       moveWindowLeft: () => Promise<void>
       moveWindowRight: () => Promise<void>
@@ -55,8 +59,6 @@ declare global {
       switchToOllama: (model?: string, url?: string) => Promise<{ success: boolean; error?: string }>
       switchToGemini: (apiKey?: string) => Promise<{ success: boolean; error?: string }>
       testLlmConnection: () => Promise<{ success: boolean; error?: string }>
-      
-      invoke: (channel: string, ...args: any[]) => Promise<any>
     }
   }
 }
@@ -75,37 +77,31 @@ const App: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null)
 
   // Effect for height monitoring
-  useEffect(() => {
-    const cleanup = window.electronAPI.onResetView(() => {
-      console.log("Received 'reset-view' message from main process.")
-      queryClient.invalidateQueries(["screenshots"])
-      queryClient.invalidateQueries(["problem_statement"])
-      queryClient.invalidateQueries(["solution"])
-      queryClient.invalidateQueries(["new_solution"])
-      setView("queue")
-    })
-
-    return () => {
-      cleanup()
-    }
-  }, [])
+  // Height monitoring effect is handled below in the combined useEffect
 
   useEffect(() => {
     if (!containerRef.current) return
 
-    const updateHeight = () => {
+    const updateHeightImmediate = () => {
       if (!containerRef.current) return
       const height = containerRef.current.scrollHeight
       const width = containerRef.current.scrollWidth
       window.electronAPI?.updateContentDimensions({ width, height })
     }
 
+    // Debounce to prevent IPC storms from MutationObserver during rendering
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null
+    const updateHeight = () => {
+      if (debounceTimer) clearTimeout(debounceTimer)
+      debounceTimer = setTimeout(updateHeightImmediate, 100)
+    }
+
     const resizeObserver = new ResizeObserver(() => {
       updateHeight()
     })
 
-    // Initial height update
-    updateHeight()
+    // Initial height update (immediate, no debounce)
+    updateHeightImmediate()
 
     // Observe for changes
     resizeObserver.observe(containerRef.current)
@@ -166,16 +162,16 @@ const App: React.FC = () => {
   return (
     <div ref={containerRef} className="min-h-0">
       <QueryClientProvider client={queryClient}>
-        <ToastProvider>
-          {view === "queue" ? (
-            <Queue setView={setView} />
-          ) : view === "solutions" ? (
-            <Solutions setView={setView} />
-          ) : (
-            <></>
-          )}
-          <ToastViewport />
-        </ToastProvider>
+        <ErrorBoundary>
+          <ToastProvider>
+            {view === "queue" ? (
+              <Queue setView={setView} />
+            ) : view === "solutions" ? (
+              <Solutions setView={setView} />
+            ) : null}
+            <ToastViewport />
+          </ToastProvider>
+        </ErrorBoundary>
       </QueryClientProvider>
     </div>
   )

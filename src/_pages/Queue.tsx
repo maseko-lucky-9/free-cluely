@@ -92,7 +92,7 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
     setChatLoading(true)
     setChatInput("")
     try {
-      const response = await window.electronAPI.invoke("gemini-chat", chatInput)
+      const response = await window.electronAPI.geminiChat(chatInput)
       setChatMessages((msgs) => [...msgs, { role: "gemini", text: response }])
     } catch (err) {
       setChatMessages((msgs) => [...msgs, { role: "gemini", text: "Error: " + String(err) }])
@@ -176,7 +176,7 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
         const latest = data?.path || (Array.isArray(data) && data.length > 0 && data[data.length - 1]?.path);
         if (latest) {
           // Call the LLM to process the screenshot
-          const response = await window.electronAPI.invoke("analyze-image-file", latest);
+          const response = await window.electronAPI.analyzeImageFile(latest);
           setChatMessages((msgs) => [...msgs, { role: "gemini", text: response.text }]);
         }
       } catch (err) {

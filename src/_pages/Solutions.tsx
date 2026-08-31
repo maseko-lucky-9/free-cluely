@@ -19,6 +19,27 @@ import Debug from "./Debug"
 
 // (Using global ElectronAPI type from src/types/electron.d.ts)
 
+/**
+ * Simple heuristic language detection for syntax highlighting.
+ * Avoids hardcoding "python" for all code output.
+ */
+function detectLanguage(code: string): string {
+  const trimmed = code.trim()
+  if (/^(import|from)\s+\w/.test(trimmed) && /def\s+\w+\s*\(/.test(trimmed)) return "python"
+  if (/^#include\s+[<"]/.test(trimmed) || /\bstd::\b/.test(trimmed)) return "cpp"
+  if (/\bpublic\s+(?:static\s+)?(?:void|int|String)\b/.test(trimmed) && /\bclass\b/.test(trimmed)) return "java"
+  if (/(?:const|let|var)\s+\w+\s*[=:]/.test(trimmed) || /=>\s*\{/.test(trimmed)) {
+    return /:\s*(?:string|number|boolean|any)\b/.test(trimmed) ? "typescript" : "javascript"
+  }
+  if (/^(?:SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER)\b/i.test(trimmed)) return "sql"
+  if (/^(?:package|func)\s+\w/.test(trimmed)) return "go"
+  if (/^(?:fn|let\s+mut|impl|struct)\b/.test(trimmed)) return "rust"
+  if (/\busing\s+System\b/.test(trimmed)) return "csharp"
+  if (/^<[!?]/.test(trimmed) || /<\/\w+>/.test(trimmed)) return "html"
+  if (/def\s+\w+|print\s*\(|import\s+\w/.test(trimmed)) return "python"
+  return "python" // default fallback
+}
+
 export const ContentSection = ({
   title,
   content,
@@ -70,7 +91,7 @@ const SolutionSection = ({
       <div className="w-full">
         <SyntaxHighlighter
           showLineNumbers
-          language="python"
+          language={detectLanguage(content as string)}
           style={dracula}
           customStyle={{
             maxWidth: "100%",
@@ -255,40 +276,8 @@ const Solutions: React.FC<SolutionsProps> = ({ setView }) => {
         setCustomContent(null)
         setAudioResult(null)
 
-        // Start audio recording from user's microphone
-        try {
-          const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-          const mediaRecorder = new MediaRecorder(stream)
-          const chunks: Blob[] = []
-          mediaRecorder.ondataavailable = (e) => chunks.push(e.data)
-          mediaRecorder.start()
-          setAudioRecording(true)
-          // Record for 5 seconds (or adjust as needed)
-          setTimeout(() => mediaRecorder.stop(), 5000)
-          mediaRecorder.onstop = async () => {
-            setAudioRecording(false)
-            const blob = new Blob(chunks, { type: chunks[0]?.type || 'audio/webm' })
-            const reader = new FileReader()
-            reader.onloadend = async () => {
-              const base64Data = (reader.result as string).split(',')[1]
-              // Send audio to Gemini for analysis
-              try {
-                const result = await window.electronAPI.analyzeAudioFromBase64(
-                  base64Data,
-                  blob.type
-                )
-                // Store result in react-query cache
-                queryClient.setQueryData(["audio_result"], result)
-                setAudioResult(result)
-              } catch (err) {
-                console.error('Audio analysis failed:', err)
-              }
-            }
-            reader.readAsDataURL(blob)
-          }
-        } catch (err) {
-          console.error('Audio recording error:', err)
-        }
+        // Note: Audio recording removed — it should only happen via explicit user action
+        // (the 🎤 Record button in QueueCommands)
 
         // Simulate receiving custom content shortly after start
         setTimeout(() => {
