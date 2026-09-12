@@ -4,6 +4,8 @@ import { WindowHelper } from "./WindowHelper"
 import { ScreenshotHelper } from "./ScreenshotHelper"
 import { ShortcutsHelper } from "./shortcuts"
 import { ProcessingHelper } from "./ProcessingHelper"
+import { APP_NAME } from "./screenshotErrors"
+import { logEvent, logStartup } from "./appLog"
 
 export class AppState {
   private static instance: AppState | null = null
@@ -26,6 +28,10 @@ export class AppState {
   } | null = null // Allow null
 
   private hasDebugged: boolean = false
+
+  // The code currently shown to the user. The debug flow diffs against THIS,
+  // not a fresh text-only re-solve the user has never seen.
+  private solutionCode: string | null = null
 
   // Processing events
   public readonly PROCESSING_EVENTS = {
@@ -96,6 +102,14 @@ export class AppState {
     this.problemInfo = problemInfo
   }
 
+  public getSolutionCode(): string | null {
+    return this.solutionCode
+  }
+
+  public setSolutionCode(code: string | null): void {
+    this.solutionCode = code
+  }
+
   public getScreenshotQueue(): string[] {
     return this.screenshotHelper.getScreenshotQueue()
   }
@@ -136,6 +150,7 @@ export class AppState {
 
     // Clear problem info
     this.problemInfo = null
+    this.solutionCode = null
 
     // Reset view to initial state
     this.setView("queue")
@@ -268,8 +283,23 @@ export class AppState {
 }
 
 // Application initialization
+// Name the running process. Note this does NOT rename the macOS Screen
+// Recording entry - that comes from the bundle - but it does fix the menu bar,
+// notifications, and anything reading app.getName().
+app.setName(APP_NAME)
+
 async function initializeApp() {
+  // A second instance would be invisible (no dock icon, no taskbar entry), own
+  // none of the global shortcuts, and still write to the same app.log.
+  if (!app.requestSingleInstanceLock()) {
+    // Say so: an app with no dock icon that quits silently is baffling.
+    logEvent("another instance already holds the lock; exiting")
+    app.quit()
+    return
+  }
+
   const appState = AppState.getInstance()
+  app.on("second-instance", () => appState.centerAndShowWindow())
 
   // Initialize IPC handlers before window creation
   initializeIpcHandlers(appState)
@@ -297,6 +327,14 @@ async function initializeApp() {
     })
 
     appState.createWindow()
+    logStartup()
+    // Renderer console lines are the only record of what the UI did with an
+    // event; without this, a renderer stall is undiagnosable from app.log.
+    // The details object is the FIRST parameter in Electron 40; the trailing
+    // positional (level, message) args are deprecated.
+    appState.getMainWindow()?.webContents.on("console-message", (details) => {
+      logEvent(`renderer[${details.level}] ${details.message}`)
+    })
     appState.createTray()
     // Register global shortcuts using ShortcutsHelper
     appState.shortcutsHelper.registerGlobalShortcuts()

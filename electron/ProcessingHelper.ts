@@ -1,8 +1,12 @@
 // ProcessingHelper.ts
 
-import { AppState } from "./main"
+// Type-only: importing the value would pull in electron and make this module
+// unloadable from plain node, which is where the test suite runs.
+import type { AppState } from "./main"
 import { LLMHelper } from "./LLMHelper"
 import { loadLlmConfig } from "./llmConfig"
+import { logEvent, errText } from "./appLog"
+import { buildDebugPayload } from "./debugPayload"
 import dotenv from "dotenv"
 
 dotenv.config()
@@ -23,11 +27,23 @@ export class ProcessingHelper {
 
     console.log("[ProcessingHelper] Initializing with Ollama")
     this.llmHelper = new LLMHelper(ollamaModel, ollamaUrl)
+    // Cold load costs ~3.7s on the first request. Pay it now, while the user is
+    // still lining up their screenshot. Warming lives here, not in LLMHelper's
+    // constructor, so constructing a helper stays side-effect free.
+    void this.llmHelper.warm()
   }
 
   public async processScreenshots(): Promise<void> {
     const mainWindow = this.appState.getMainWindow()
     if (!mainWindow) return
+
+    // One run at a time. A second Cmd+Enter mid-run used to start a concurrent
+    // generation and orphan the first AbortController; two 6.6 GB runs on a
+    // 24 GB machine thrash, so both finish slower than one would have.
+    if (this.currentProcessingAbortController || this.currentExtraProcessingAbortController) {
+      logEvent("already processing; ignoring duplicate request")
+      return
+    }
 
     const view = this.appState.getView()
 
@@ -51,10 +67,12 @@ export class ProcessingHelper {
 
       mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.INITIAL_START)
       this.appState.setView("solutions")
+      // A new problem must never be diffed against the previous problem's code.
+      this.appState.setSolutionCode(null)
       this.currentProcessingAbortController = new AbortController()
 
       try {
-        console.log("[ProcessingHelper] Solving problem from image:", lastPath);
+        logEvent(`queue: solveImageProblem -> ${lastPath}`);
         const result = await this.llmHelper.solveImageProblem(
           lastPath,
           this.currentProcessingAbortController.signal
@@ -88,10 +106,14 @@ export class ProcessingHelper {
           }
         };
         console.log("[ProcessingHelper] Sending solution for language:", result.solution.language);
+        this.appState.setSolutionCode(result.solution.code)
+        // A debug run usually follows, often minutes later; keep the model resident.
+        void this.llmHelper.warm()
+        logEvent("queue: emitting SOLUTION_SUCCESS");
         mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.SOLUTION_SUCCESS, solutionPayload);
       } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : String(error)
-        console.error("Image problem-solving error:", message)
+        const message = errText(error)
+        logEvent(`queue: FAILED emitting INITIAL_SOLUTION_ERROR: ${message}`)
         mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.INITIAL_SOLUTION_ERROR, message)
       } finally {
         this.currentProcessingAbortController = null
@@ -106,6 +128,7 @@ export class ProcessingHelper {
         return
       }
 
+      logEvent("DEBUG flow start")
       mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.DEBUG_START)
       this.currentExtraProcessingAbortController = new AbortController()
       const signal = this.currentExtraProcessingAbortController.signal
@@ -131,17 +154,30 @@ export class ProcessingHelper {
             difficulty: result.problemInfo.difficulty
           }
           this.appState.setProblemInfo(newProblemInfo)
+          this.appState.setSolutionCode(result.solution.code)
 
+          logEvent("debug: emitting DEBUG_SUCCESS (no previous solution)")
           mainWindow.webContents.send(
             this.appState.PROCESSING_EVENTS.DEBUG_SUCCESS,
-            { solution: result.solution }
+            buildDebugPayload(null, result.solution)
           )
           return
         }
 
-        const currentSolution = await this.llmHelper.generateSolution(problemInfo, signal)
-        const currentCode = currentSolution.solution.code
+        // Diff against the code the user is looking at. The old path re-solved
+        // the problem from text (no image, ~16s) and diffed against THAT - a
+        // third variant nobody had seen.
+        let currentCode: string = this.appState.getSolutionCode() ?? ""
+        if (currentCode) {
+          logEvent("debug: reusing displayed solution as baseline")
+        } else {
+          // No cached solution (e.g. the app was relaunched mid-session).
+          logEvent("debug: no cached solution, generateSolution ->")
+          currentCode = (await this.llmHelper.generateSolution(problemInfo, signal)).solution.code
+          logEvent("debug: generateSolution OK")
+        }
 
+        logEvent(`debug: debugSolutionWithImages -> (${extraScreenshotQueue.length} images)`)
         const debugResult = await this.llmHelper.debugSolutionWithImages(
           problemInfo,
           currentCode,
@@ -150,14 +186,17 @@ export class ProcessingHelper {
         )
 
         this.appState.setHasDebugged(true)
+        // The next debug run improves on this fix, not on the original.
+        this.appState.setSolutionCode(debugResult.solution.code)
+        logEvent("debug: emitting DEBUG_SUCCESS")
         mainWindow.webContents.send(
           this.appState.PROCESSING_EVENTS.DEBUG_SUCCESS,
-          debugResult
+          buildDebugPayload(currentCode, debugResult.solution)
         )
 
       } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : String(error)
-        console.error("Debug processing error:", message)
+        const message = errText(error)
+        logEvent(`debug: FAILED emitting DEBUG_ERROR: ${message}`)
         mainWindow.webContents.send(
           this.appState.PROCESSING_EVENTS.DEBUG_ERROR,
           message
