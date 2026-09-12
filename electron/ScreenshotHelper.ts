@@ -3,7 +3,9 @@
 import path from "node:path"
 import os from "node:os"
 import fs from "node:fs"
-import { app, systemPreferences, desktopCapturer } from "electron"
+import { app, systemPreferences, desktopCapturer, nativeImage, screen } from "electron"
+import { downscaleWidth } from "./imageBudget"
+import { logEvent } from "./appLog"
 import { v4 as uuidv4 } from "uuid"
 import screenshot from "screenshot-desktop"
 import {
@@ -118,6 +120,38 @@ export class ScreenshotHelper {
       await fs.promises.unlink(staging).catch(() => {})
     }
     this.logPermission(`capture done bytes=${fs.statSync(destPath).size} path=${destPath}`)
+    await this.fitToLogicalSize(destPath)
+  }
+
+  /**
+   * Shrinks a 2x Retina capture to its logical size; leaves 1x captures alone.
+   * Measured: 3024x1964 costs the model 4056 image tokens / ~15s per call,
+   * 1512 wide costs 1484 / ~3s and still reads correctly (see imageBudget.ts).
+   * The on-disk bytes are JPEG (that is what the capture tool writes, whatever
+   * the extension says), so we write JPEG back.
+   */
+  private async fitToLogicalSize(filePath: string): Promise<void> {
+    try {
+      const img = nativeImage.createFromPath(filePath)
+      if (img.isEmpty()) return
+      const { width, height } = img.getSize()
+      const displays = screen.getAllDisplays().map((d) => ({
+        width: d.size.width,
+        height: d.size.height,
+        scaleFactor: d.scaleFactor
+      }))
+      const target = downscaleWidth(width, height, displays)
+      if (!target) {
+        logEvent(`capture ${width}x${height} kept (1x or unmatched display)`)
+        return
+      }
+      const out = img.resize({ width: target, quality: "best" }).toJPEG(90)
+      await fs.promises.writeFile(filePath, out)
+      logEvent(`capture ${width}x${height} -> ${target}px wide, bytes=${out.length}`)
+    } catch (error) {
+      // A full-size image is slower, not wrong; never fail the capture over this.
+      logEvent(`capture resize skipped: ${error instanceof Error ? error.message : String(error)}`)
+    }
   }
 
   public async takeScreenshot(

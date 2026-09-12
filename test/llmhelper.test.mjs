@@ -422,6 +422,276 @@ await check("a solution missing code still produces both keys", () => {
   assert.equal(out.solution.new_code, null);
 });
 
+// --- image budget -----------------------------------------------------------
+
+const { downscaleWidth } = require("../dist-electron/imageBudget.js");
+
+await check("a 2x Retina capture is shrunk to its logical width", () => {
+  // 3024x1964 @144dpi measured at 4056 image tokens / 15.5s prompt-eval;
+  // 1512 wide measured at 1484 tokens / 3.3s with the title still read correctly.
+  const displays = [
+    { width: 1512, height: 982, scaleFactor: 2 },
+    { width: 3440, height: 1440, scaleFactor: 1 },
+  ];
+  assert.equal(downscaleWidth(3024, 1964, displays), 1512);
+});
+
+await check("a 1x external-display capture is left alone", () => {
+  // 3440x1440 @72dpi has no spare detail; halving it destroys 2.3x of real text.
+  const displays = [
+    { width: 1512, height: 982, scaleFactor: 2 },
+    { width: 3440, height: 1440, scaleFactor: 1 },
+  ];
+  assert.equal(downscaleWidth(3440, 1440, displays), null);
+});
+
+await check("a capture that matches no display is never resized on a guess", () => {
+  const displays = [{ width: 1512, height: 982, scaleFactor: 2 }];
+  assert.equal(downscaleWidth(3024, 1900, displays), null, "height mismatch");
+  assert.equal(downscaleWidth(1512, 982, displays), null, "already logical size");
+  assert.equal(downscaleWidth(3024, 1964, []), null, "no displays known");
+});
+
+// --- keep-alive & warm-up ---------------------------------------------------
+
+await check("keep_alive outlives the observed solve-to-debug gap and is bounded", async () => {
+  // app.log: 52 minutes between solve and debug, model cold both times at 10m.
+  // -1 would never unload 6.6 GB on a 24 GB machine; 30m fails safe.
+  const helper = freshHelper();
+  script = (n) => ({ status: 200, body: n === 1 ? GOOD_CLASSIFICATION : GOOD_SOLUTION });
+  await helper.solveImageProblem(fixturePng);
+  assert.equal(requests[0].keep_alive, "30m");
+});
+
+await check("warm() loads the model with the same num_ctx as a real call, no prompt", async () => {
+  // Ollama keys the loaded runner on load-time options; a warm with a different
+  // num_ctx forces a second load and costs the 3.7s twice.
+  const helper = freshHelper();
+  // Call 1 is the warm; the real solve is calls 2 and 3.
+  script = (n) => ({
+    status: 200,
+    body:
+      n === 1
+        ? JSON.stringify({ done: true, done_reason: "load" })
+        : n === 2
+          ? GOOD_CLASSIFICATION
+          : GOOD_SOLUTION,
+  });
+  await helper.warm();
+  assert.equal(requests.length, 1, "warm must be exactly one request");
+  const warm = requests[0];
+  assert.ok(!("prompt" in warm) || warm.prompt === "", "warm must not generate");
+  assert.equal(warm.keep_alive, "30m");
+  await helper.solveImageProblem(fixturePng);
+  assert.equal(warm.options.num_ctx, requests[1].options.num_ctx, "load options must match");
+  assert.equal(warm.model, requests[1].model);
+});
+
+await check("warm() never throws, even with Ollama down", async () => {
+  delete require.cache[require.resolve("../dist-electron/LLMHelper.js")];
+  const { LLMHelper } = require("../dist-electron/LLMHelper.js");
+  const helper = new LLMHelper(undefined, "http://127.0.0.1:1");
+  await helper.warm();
+});
+
+// --- debug flow: baseline reuse & lifecycle ---------------------------------
+//
+// ProcessingHelper drives this, and it is loadable from plain node because its
+// only reference to AppState is a type. A fake AppState records the events it
+// is asked to send, so the whole flow is observable without electron.
+
+function fakeAppState(view) {
+  const sent = [];
+  const state = {
+    view,
+    problemInfo: null,
+    solutionCode: null,
+    hasDebugged: false,
+    queue: [],
+    extraQueue: [],
+    sent,
+    PROCESSING_EVENTS: {
+      NO_SCREENSHOTS: "processing-no-screenshots",
+      INITIAL_START: "initial-start",
+      PROBLEM_EXTRACTED: "problem-extracted",
+      SOLUTION_SUCCESS: "solution-success",
+      INITIAL_SOLUTION_ERROR: "solution-error",
+      DEBUG_START: "debug-start",
+      DEBUG_SUCCESS: "debug-success",
+      DEBUG_ERROR: "debug-error",
+    },
+    getMainWindow: () => ({
+      webContents: { send: (channel, payload) => sent.push({ channel, payload }) },
+    }),
+    getView: () => state.view,
+    setView: (v) => { state.view = v; },
+    getScreenshotHelper: () => ({
+      getScreenshotQueue: () => state.queue,
+      getExtraScreenshotQueue: () => state.extraQueue,
+    }),
+    getProblemInfo: () => state.problemInfo,
+    setProblemInfo: (p) => { state.problemInfo = p; },
+    getSolutionCode: () => state.solutionCode,
+    setSolutionCode: (c) => { state.solutionCode = c; },
+    setHasDebugged: (v) => { state.hasDebugged = v; },
+  };
+  return state;
+}
+
+function freshProcessingHelper(appState) {
+  process.env.OLLAMA_URL = stubUrl;
+  process.env.OLLAMA_MODEL = "qwen2.5vl:7b";
+  delete require.cache[require.resolve("../dist-electron/ProcessingHelper.js")];
+  delete require.cache[require.resolve("../dist-electron/LLMHelper.js")];
+  const { ProcessingHelper } = require("../dist-electron/ProcessingHelper.js");
+  return new ProcessingHelper(appState);
+}
+
+const IMPROVED_SOLUTION = JSON.stringify({
+  solution: {
+    code: "def find_it(seq):\n    return reduce(xor, seq)",
+    language: "Python",
+    explanation: "handles the empty case",
+    thoughts: ["guard empty input"],
+    time_complexity: "O(n)",
+    space_complexity: "O(1)",
+  },
+});
+const DISPLAYED_CODE = "def find_it(seq):\n    return 5";
+
+await check("a debug run reuses the displayed solution instead of re-solving it", async () => {
+  // The old path called generateSolution first: a text-only re-solve (~16s on
+  // this machine) whose output the user had never seen, and which then became
+  // the "Previous Version" in the diff.
+  const appState = fakeAppState("solutions");
+  appState.problemInfo = { problem_statement: "Find the odd int", language: "Python" };
+  appState.solutionCode = DISPLAYED_CODE;
+  appState.extraQueue = [fixturePng];
+  const helper = freshProcessingHelper(appState);
+  script = (n) => ({ status: 200, body: n === 1 ? "" : IMPROVED_SOLUTION });
+
+  await helper.processScreenshots();
+
+  // Call 1 is the constructor warm-up; exactly one generation must follow it.
+  assert.equal(requests.length, 2, `expected warm + 1 debug call, got ${requests.length}`);
+  const success = appState.sent.find((e) => e.channel === "debug-success");
+  assert.ok(success, `no debug-success sent: ${JSON.stringify(appState.sent.map((e) => e.channel))}`);
+  assert.equal(
+    success.payload.solution.old_code,
+    DISPLAYED_CODE,
+    "the diff baseline must be the code the user is looking at"
+  );
+  assert.equal(success.payload.solution.new_code, "def find_it(seq):\n    return reduce(xor, seq)");
+});
+
+await check("a debug run with no cached solution still generates a baseline", async () => {
+  // e.g. the app was relaunched between the solve and the debug.
+  const appState = fakeAppState("solutions");
+  appState.problemInfo = { problem_statement: "Find the odd int", language: "Python" };
+  appState.solutionCode = null;
+  appState.extraQueue = [fixturePng];
+  const helper = freshProcessingHelper(appState);
+  script = (n) => ({ status: 200, body: n === 1 ? "" : n === 2 ? GOOD_SOLUTION : IMPROVED_SOLUTION });
+
+  await helper.processScreenshots();
+
+  assert.equal(requests.length, 3, "warm + generateSolution + debug");
+  const success = appState.sent.find((e) => e.channel === "debug-success");
+  assert.equal(success.payload.solution.old_code, DISPLAYED_CODE);
+});
+
+await check("the next debug improves on the fix, not on the original", async () => {
+  const appState = fakeAppState("solutions");
+  appState.problemInfo = { problem_statement: "Find the odd int", language: "Python" };
+  appState.solutionCode = DISPLAYED_CODE;
+  appState.extraQueue = [fixturePng];
+  const helper = freshProcessingHelper(appState);
+  script = (n) => ({ status: 200, body: n === 1 ? "" : IMPROVED_SOLUTION });
+
+  await helper.processScreenshots();
+
+  assert.equal(
+    appState.solutionCode,
+    "def find_it(seq):\n    return reduce(xor, seq)",
+    "the debug output must become the baseline for the following run"
+  );
+});
+
+await check("a new problem clears the old baseline before solving", async () => {
+  // Without this, a debug after a FAILED second solve diffs problem B's
+  // statement against problem A's code.
+  const appState = fakeAppState("queue");
+  appState.solutionCode = "code from the previous problem";
+  appState.queue = [fixturePng];
+  const helper = freshProcessingHelper(appState);
+  script = (n) => ({ status: 200, body: n === 1 ? "" : n === 2 ? GOOD_CLASSIFICATION : GARBAGE_PROSE });
+
+  await helper.processScreenshots();
+
+  assert.ok(
+    appState.sent.some((e) => e.channel === "solution-error"),
+    "the failed solve must surface an error"
+  );
+  assert.equal(appState.solutionCode, null, "a failed solve must leave no stale baseline");
+});
+
+await check("a successful solve records its code as the debug baseline", async () => {
+  const appState = fakeAppState("queue");
+  appState.queue = [fixturePng];
+  const helper = freshProcessingHelper(appState);
+  script = (n) => ({ status: 200, body: n === 1 ? "" : n === 2 ? GOOD_CLASSIFICATION : GOOD_SOLUTION });
+
+  await helper.processScreenshots();
+
+  assert.ok(appState.sent.some((e) => e.channel === "solution-success"));
+  assert.equal(appState.solutionCode, DISPLAYED_CODE);
+});
+
+await check("a second request mid-run is ignored, not run concurrently", async () => {
+  // The first call flips the view to "solutions" synchronously, so a second
+  // Cmd+Enter lands in the DEBUG branch while the solve is still in flight.
+  // Unguarded, that starts a second generation: two 6.6 GB runs on a 24 GB
+  // machine thrash and both finish slower than one would have.
+  const appState = fakeAppState("queue");
+  appState.queue = [fixturePng];
+  appState.extraQueue = [fixturePng];
+  const helper = freshProcessingHelper(appState);
+  script = (n) => ({
+    status: 200,
+    body: n === 1 ? "" : n === 2 ? GOOD_CLASSIFICATION : GOOD_SOLUTION,
+    delayMs: n >= 2 ? 400 : 0,
+  });
+
+  const solving = helper.processScreenshots();
+  await new Promise((r) => setTimeout(r, 100));
+  await helper.processScreenshots();
+  await solving;
+
+  // warm + classification + solution = 3. A concurrent debug would add one more.
+  assert.equal(requests.length, 3, `expected 3 calls, got ${requests.length}`);
+  assert.equal(
+    appState.sent.filter((e) => e.channel === "debug-start").length,
+    0,
+    "no debug run may start while a solve is in flight"
+  );
+});
+
+await check("a later request is accepted once the run has finished", async () => {
+  // The guard must release, or the app would wedge after its first solve.
+  const appState = fakeAppState("queue");
+  appState.queue = [fixturePng];
+  const helper = freshProcessingHelper(appState);
+  script = (n) => ({ status: 200, body: n === 1 ? "" : n === 2 ? GOOD_CLASSIFICATION : GOOD_SOLUTION });
+
+  await helper.processScreenshots();
+  appState.extraQueue = [fixturePng];
+  script = (n) => ({ status: 200, body: IMPROVED_SOLUTION });
+  await helper.processScreenshots();
+
+  assert.equal(appState.sent.filter((e) => e.channel === "debug-start").length, 1);
+  assert.ok(appState.sent.some((e) => e.channel === "debug-success"));
+});
+
 // --- report -----------------------------------------------------------------
 
 server.close();

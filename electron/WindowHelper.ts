@@ -105,7 +105,10 @@ export class WindowHelper {
         nodeIntegration: false,
         contextIsolation: true,
         sandbox: true,
-        preload: path.join(__dirname, "preload.js")
+        preload: path.join(__dirname, "preload.js"),
+        // This overlay is hidden (Cmd+B) or behind the interview window while it
+        // waits 20-40s for Ollama; the timer switch in main.ts is not this knob.
+        backgroundThrottling: false
       },
       show: false, // Start hidden, then show after setup
       alwaysOnTop: true,

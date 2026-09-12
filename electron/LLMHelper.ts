@@ -12,6 +12,13 @@ interface OllamaGenerateResponse {
   done?: boolean;
   done_reason?: string;
   error?: string;
+  // Timings, in nanoseconds, exactly as Ollama reports them.
+  total_duration?: number;
+  load_duration?: number;
+  prompt_eval_count?: number;
+  prompt_eval_duration?: number;
+  eval_count?: number;
+  eval_duration?: number;
 }
 
 interface OllamaModelInfo {
@@ -45,9 +52,42 @@ export class LLMHelper {
     this.numCtx = Number(process.env.OLLAMA_NUM_CTX) || 16384;
     this.numPredict = Number(process.env.OLLAMA_NUM_PREDICT) || 2048;
     this.timeoutMs = Number(process.env.OLLAMA_TIMEOUT_MS) || 180_000;
-    this.keepAlive = process.env.OLLAMA_KEEP_ALIVE || "10m";
+    // app.log showed 52 minutes between a solve and its debug run, so 10m meant
+    // paying the ~3.7s cold load twice in one session. -1 would pin 6.6 GB for
+    // ever on a 24 GB machine, and an unawaited unload on quit cannot be relied
+    // on to release it; 30m fails safe.
+    this.keepAlive = process.env.OLLAMA_KEEP_ALIVE || "30m";
 
     this.ready = this.initialize();
+  }
+
+  /** Load-time options. Ollama reloads the model when these differ between calls. */
+  private loadOptions(): { num_ctx: number } {
+    return { num_ctx: this.numCtx };
+  }
+
+  /**
+   * Loads the model into memory without generating, so the first real request
+   * does not pay the cold load. Never throws: warming is an optimisation, and
+   * every real call still goes through ensureReady().
+   */
+  public async warm(): Promise<void> {
+    try {
+      await this.ensureReady();
+      const res = await fetch(`${this.ollamaUrl}/api/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: this.ollamaModel,
+          keep_alive: this.keepAlive,
+          options: this.loadOptions(),
+        }),
+        signal: AbortSignal.timeout(60_000),
+      });
+      logEvent(`warm ${this.ollamaModel} status=${res.status}`);
+    } catch (error) {
+      logEvent(`warm skipped: ${this.errText(error)}`);
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -223,10 +263,11 @@ export class LLMHelper {
         // version hardcoded 0.7 for every call, including the JSON ones.
         temperature: opts?.temperature ?? (opts?.schema ? 0 : 0.7),
         top_p: 0.9,
-        num_ctx: this.numCtx,
+        ...this.loadOptions(),
         num_predict: this.numPredict,
       },
     };
+    const imageBytes = (images ?? []).reduce((n, b64) => n + Math.floor((b64.length * 3) / 4), 0);
 
     if (images?.length) body.images = images;
     if (opts?.schema) body.format = opts.schema;
@@ -277,9 +318,18 @@ export class LLMHelper {
       }
 
       const data: OllamaGenerateResponse = await res.json();
+      const ms = (ns?: number) => (ns == null ? "-" : `${Math.round(ns / 1e6)}ms`);
+      // Where the time actually goes: model load, then image/prompt eval, then
+      // generation. Without prompt_tokens a "faster" run cannot be told apart
+      // from a prompt-cache hit - which is how the first resize measurement in
+      // this investigation nearly overstated its own win.
       logEvent(
         `ollama reply status=${res.status} responseChars=${(data.response ?? "").length} ` +
-          `thinkingChars=${(data.thinking ?? "").length} done_reason=${data.done_reason ?? "-"}`
+          `thinkingChars=${(data.thinking ?? "").length} done_reason=${data.done_reason ?? "-"} ` +
+          `images=${images?.length ?? 0} imageBytes=${imageBytes} ` +
+          `load=${ms(data.load_duration)} prompt_tokens=${data.prompt_eval_count ?? "-"} ` +
+          `prompt_eval=${ms(data.prompt_eval_duration)} gen_tokens=${data.eval_count ?? "-"} ` +
+          `gen=${ms(data.eval_duration)} total=${ms(data.total_duration)}`
       );
       if (data.error) throw new Error(`Ollama error: ${data.error}`);
 

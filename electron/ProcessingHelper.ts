@@ -1,6 +1,8 @@
 // ProcessingHelper.ts
 
-import { AppState } from "./main"
+// Type-only: importing the value would pull in electron and make this module
+// unloadable from plain node, which is where the test suite runs.
+import type { AppState } from "./main"
 import { LLMHelper } from "./LLMHelper"
 import { loadLlmConfig } from "./llmConfig"
 import { logEvent, errText } from "./appLog"
@@ -25,11 +27,23 @@ export class ProcessingHelper {
 
     console.log("[ProcessingHelper] Initializing with Ollama")
     this.llmHelper = new LLMHelper(ollamaModel, ollamaUrl)
+    // Cold load costs ~3.7s on the first request. Pay it now, while the user is
+    // still lining up their screenshot. Warming lives here, not in LLMHelper's
+    // constructor, so constructing a helper stays side-effect free.
+    void this.llmHelper.warm()
   }
 
   public async processScreenshots(): Promise<void> {
     const mainWindow = this.appState.getMainWindow()
     if (!mainWindow) return
+
+    // One run at a time. A second Cmd+Enter mid-run used to start a concurrent
+    // generation and orphan the first AbortController; two 6.6 GB runs on a
+    // 24 GB machine thrash, so both finish slower than one would have.
+    if (this.currentProcessingAbortController || this.currentExtraProcessingAbortController) {
+      logEvent("already processing; ignoring duplicate request")
+      return
+    }
 
     const view = this.appState.getView()
 
@@ -53,6 +67,8 @@ export class ProcessingHelper {
 
       mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.INITIAL_START)
       this.appState.setView("solutions")
+      // A new problem must never be diffed against the previous problem's code.
+      this.appState.setSolutionCode(null)
       this.currentProcessingAbortController = new AbortController()
 
       try {
@@ -90,6 +106,9 @@ export class ProcessingHelper {
           }
         };
         console.log("[ProcessingHelper] Sending solution for language:", result.solution.language);
+        this.appState.setSolutionCode(result.solution.code)
+        // A debug run usually follows, often minutes later; keep the model resident.
+        void this.llmHelper.warm()
         logEvent("queue: emitting SOLUTION_SUCCESS");
         mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.SOLUTION_SUCCESS, solutionPayload);
       } catch (error: unknown) {
@@ -135,6 +154,7 @@ export class ProcessingHelper {
             difficulty: result.problemInfo.difficulty
           }
           this.appState.setProblemInfo(newProblemInfo)
+          this.appState.setSolutionCode(result.solution.code)
 
           logEvent("debug: emitting DEBUG_SUCCESS (no previous solution)")
           mainWindow.webContents.send(
@@ -144,10 +164,18 @@ export class ProcessingHelper {
           return
         }
 
-        logEvent("debug: generateSolution ->")
-        const currentSolution = await this.llmHelper.generateSolution(problemInfo, signal)
-        logEvent("debug: generateSolution OK")
-        const currentCode = currentSolution.solution.code
+        // Diff against the code the user is looking at. The old path re-solved
+        // the problem from text (no image, ~16s) and diffed against THAT - a
+        // third variant nobody had seen.
+        let currentCode: string = this.appState.getSolutionCode() ?? ""
+        if (currentCode) {
+          logEvent("debug: reusing displayed solution as baseline")
+        } else {
+          // No cached solution (e.g. the app was relaunched mid-session).
+          logEvent("debug: no cached solution, generateSolution ->")
+          currentCode = (await this.llmHelper.generateSolution(problemInfo, signal)).solution.code
+          logEvent("debug: generateSolution OK")
+        }
 
         logEvent(`debug: debugSolutionWithImages -> (${extraScreenshotQueue.length} images)`)
         const debugResult = await this.llmHelper.debugSolutionWithImages(
@@ -158,6 +186,8 @@ export class ProcessingHelper {
         )
 
         this.appState.setHasDebugged(true)
+        // The next debug run improves on this fix, not on the original.
+        this.appState.setSolutionCode(debugResult.solution.code)
         logEvent("debug: emitting DEBUG_SUCCESS")
         mainWindow.webContents.send(
           this.appState.PROCESSING_EVENTS.DEBUG_SUCCESS,

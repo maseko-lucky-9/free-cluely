@@ -16,6 +16,7 @@
     "start": "npm run app:dev",
     "dist": "npm run app:build",
     "test": "npm run build && node test/llmhelper.test.mjs",
+    "test:e2e": "npm run build && electron test/debug-rerun.e2e.mjs",
     "pack:mac": "npm run build && electron-builder --mac --dir --arm64 -c.mac.identity=null && bash scripts/sign-local.sh"
   },
   "build": {

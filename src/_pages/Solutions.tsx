@@ -157,6 +157,10 @@ const Solutions: React.FC<SolutionsProps> = ({ setView }) => {
   const [audioResult, setAudioResult] = useState<AudioResult | null>(null)
 
   const [debugProcessing, setDebugProcessing] = useState(false)
+  // Gate for the Debug page. Kept in React state rather than read from the query
+  // cache during render: a cache write alone never re-renders, so a payload
+  // could land and sit there unrendered.
+  const [debugSolution, setDebugSolution] = useState<unknown>(null)
   const [problemStatementData, setProblemStatementData] =
     useState<ProblemStatementData | null>(null)
   const [solutionData, setSolutionData] = useState<string | null>(null)
@@ -226,7 +230,8 @@ const Solutions: React.FC<SolutionsProps> = ({ setView }) => {
   }
 
   useEffect(() => {
-    // Height update logic
+    // Height update logic. Kept separate from the IPC listeners below so a
+    // tooltip hover no longer tears down and re-registers every listener.
     const updateDimensions = () => {
       if (contentRef.current) {
         let contentHeight = contentRef.current.scrollHeight
@@ -248,7 +253,13 @@ const Solutions: React.FC<SolutionsProps> = ({ setView }) => {
     }
     updateDimensions()
 
-    // Set up event listeners
+    return () => {
+      resizeObserver.disconnect()
+    }
+  }, [isTooltipVisible, tooltipHeight])
+
+  useEffect(() => {
+    // Set up event listeners - once per mount.
     const cleanupFunctions = [
       window.electronAPI.onScreenshotTaken(() => refetch()),
       window.electronAPI.onResetView(() => {
@@ -258,6 +269,7 @@ const Solutions: React.FC<SolutionsProps> = ({ setView }) => {
         // Clear the queries
         queryClient.removeQueries(["solution"])
         queryClient.removeQueries(["new_solution"])
+        setDebugSolution(null)
 
         // Reset other states
         refetch()
@@ -341,9 +353,13 @@ const Solutions: React.FC<SolutionsProps> = ({ setView }) => {
       }),
       //the first time debugging works, we'll set the view to debug and populate the cache with the data
       window.electronAPI.onDebugSuccess((data) => {
-        console.log({ debug_data: data })
+        // Explicit strings: this line is bridged into app.log by the main process.
+        console.log(
+          `debug_data keys=${Object.keys(data?.solution ?? {}).join(",")} new_code=${data?.solution?.new_code?.length ?? -1} chars`
+        )
 
         queryClient.setQueryData(["new_solution"], data.solution)
+        setDebugSolution(data?.solution ?? null)
         setDebugProcessing(false)
       }),
       //when there was an error in the initial debugging, we'll show a toast and stop the little generating pulsing thing.
@@ -365,10 +381,9 @@ const Solutions: React.FC<SolutionsProps> = ({ setView }) => {
     ]
 
     return () => {
-      resizeObserver.disconnect()
       cleanupFunctions.forEach((cleanup) => cleanup())
     }
-  }, [isTooltipVisible, tooltipHeight])
+  }, [])
 
   useEffect(() => {
     setProblemStatementData(
@@ -434,7 +449,7 @@ const Solutions: React.FC<SolutionsProps> = ({ setView }) => {
 
   return (
     <>
-      {!isResetting && queryClient.getQueryData(["new_solution"]) ? (
+      {!isResetting && debugSolution ? (
         <>
           <Debug
             isProcessing={debugProcessing}

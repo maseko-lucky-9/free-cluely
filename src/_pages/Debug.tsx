@@ -295,33 +295,52 @@ const Debug: React.FC<DebugProps> = ({ isProcessing, setIsProcessing }) => {
     }
   }
 
-  useEffect(() => {
-    // Try to get the new solution data from cache first
-    const newSolution = queryClient.getQueryData(["new_solution"]) as {
-      old_code: string | null
-      new_code: string | null
-      code?: string
-      thoughts?: string[]
-      time_complexity?: string
-      space_complexity?: string
-    } | null
+  type DebugSolution = {
+    old_code?: string | null
+    new_code?: string | null
+    code?: string
+    thoughts?: string[]
+    time_complexity?: string
+    space_complexity?: string
+  } | null | undefined
 
-    // If we have cached data, set all state variables to the cached data
-    if (newSolution) {
-      setOldCode(newSolution.old_code || null)
-      setNewCode(newSolution.new_code || newSolution.code || null)
-      setThoughtsData(newSolution.thoughts || null)
-      setTimeComplexityData(newSolution.time_complexity || null)
-      setSpaceComplexityData(newSolution.space_complexity || null)
+  useEffect(() => {
+    // This used to run only on mount. On a repeat debug the component is already
+    // mounted, so DEBUG_START showed "Loading code comparison..." and
+    // DEBUG_SUCCESS then redisplayed the PREVIOUS run's diff - the reported
+    // "loads forever and never shows the fix". The same mapping now runs on
+    // every DEBUG_SUCCESS.
+    const apply = (solution: DebugSolution) => {
+      if (!solution) return
+      setOldCode(solution.old_code || null)
+      setNewCode(solution.new_code || solution.code || null)
+      setThoughtsData(solution.thoughts || null)
+      setTimeComplexityData(solution.time_complexity || null)
+      setSpaceComplexityData(solution.space_complexity || null)
       setIsProcessing(false)
     }
+    apply(queryClient.getQueryData(["new_solution"]) as DebugSolution)
 
     // Set up event listeners
     const cleanupFunctions = [
       window.electronAPI.onScreenshotTaken(() => refetch()),
       window.electronAPI.onResetView(() => refetch()),
-      window.electronAPI.onDebugSuccess(() => {
-        setIsProcessing(false) //all the other stuff ahapepns in the parent component, so we just need to do this.
+      window.electronAPI.onDebugSuccess((data) => {
+        console.log(
+          `debug-view applied new_code=${data?.solution?.new_code?.length ?? -1} chars old_code=${data?.solution?.old_code?.length ?? -1} chars`
+        )
+        apply(data?.solution as DebugSolution)
+        // Post-paint self-check. A Finder-launched app has no console, so
+        // without this there is no record of whether the fix actually reached
+        // the screen - which is exactly what made the original report
+        // undiagnosable. The main process mirrors this into app.log.
+        requestAnimationFrame(() => {
+          const text = document.body.innerText
+          console.log(
+            `debug-view painted stillLoading=${text.includes("Loading code comparison")} ` +
+              `panes=${text.includes("New Version")} chars=${text.length}`
+          )
+        })
       }),
       window.electronAPI.onDebugStart(() => {
         setIsProcessing(true)
@@ -400,8 +419,9 @@ const Debug: React.FC<DebugProps> = ({ isProcessing, setIsProcessing }) => {
         onTooltipVisibilityChange={handleTooltipVisibilityChange}
       />
 
-      {/* Main Content */}
-      <div className="w-full text-sm text-black bg-black/60 rounded-md">
+      {/* Main Content - two code panes exceed the window's clamped height for any
+          real solution; without a scroll container the diff was simply cut off. */}
+      <div className="w-full text-sm text-black bg-black/60 rounded-md max-h-[100vh] overflow-y-auto">
         <div className="rounded-lg overflow-hidden">
           <div className="px-4 py-3 space-y-4">
             {/* Thoughts Section */}
