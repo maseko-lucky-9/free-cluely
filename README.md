@@ -206,6 +206,34 @@ over 70 sequential runs:
 
 Text-only models are rejected at startup with a clear message.
 
+### **Performance**
+Measured on Apple M5 Pro / 24 GB with `qwen3.5:9b`, unique prompts so nothing is
+served from Ollama's prompt cache:
+
+| | image tokens | prompt eval |
+|---|---|---|
+| raw 2x Retina capture (3024x1964) | 4083 | 17.7s |
+| downscaled to logical 1x (1512 wide) | 1519 | 3.7s |
+
+Captures are therefore downscaled to their display's logical size before being
+sent (`electron/imageBudget.ts`). A 1x display's capture is left untouched -
+there is no spare detail to discard. Both sizes read the same problem title.
+
+Two further savings: a debug run reuses the solution already on screen instead of
+re-solving the problem from text first, and the model is warmed at launch and kept
+resident for 30 minutes, so a debug run minutes later does not pay the cold load.
+
+Per-call timings land in `app.log` (`load`, `prompt_tokens`, `prompt_eval`,
+`gen_tokens`, `gen`), which is the only way to tell a real speed-up from a
+prompt-cache hit.
+
+### **Diagnostics**
+A Finder-launched app has no visible stdout, so everything worth diagnosing goes
+to `~/Library/Application Support/Meeting Notes Coder/app.log`: a startup line
+naming the bundle and version, every Ollama call with its timings, and the
+renderer's own console output, including a post-paint check of whether the debug
+view actually reached the screen.
+
 ### **System Requirements**
 ```bash
 Minimum:  4GB RAM, Dual-core CPU, 2GB storage
